@@ -1,0 +1,12 @@
+# .NET build output
+bin/
+obj/
+
+# Published / distributable builds
+dist/
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# OS cruft
+.DS_Store

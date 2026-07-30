@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>Dungeon</RootNamespace>
+    <AssemblyName>Dungeon</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="OpenTK" Version="4.8.2" />
+  </ItemGroup>
+
+  <!-- Bundle OpenAL-Soft on Windows so sound works without a system OpenAL.
+       OpenTK's OpenAL loader looks for openal32.dll then soft_oal.dll in the app dir.
+       Classified as a native .dll, it embeds into the single-file exe and extracts at runtime. -->
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <None Include="native\win-x64\soft_oal.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>soft_oal.dll</Link>
+    </None>
+  </ItemGroup>
+
+</Project>

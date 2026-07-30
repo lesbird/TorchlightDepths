@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading.Tasks;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
@@ -96,7 +97,14 @@ namespace Dungeon
         static readonly int[] DX = { 0, 1, 0, -1 };
         static readonly int[] DY = { -1, 0, 1, 0 };
 
+        // ---- screenshot capture (headless, deterministic) -------------------
+        bool _capture; string _capDir; int _capShot, _capSettle;
+        static readonly string[] CapShots = { "menu", "hero", "explore", "depths" };
+
         public Game(GameWindowSettings gws, NativeWindowSettings nws) : base(gws, nws) { }
+
+        /// <summary>Enable auto-capture mode: boot through a fixed set of scenes, save a BMP of each, then quit.</summary>
+        public void EnableCapture(string dir) { _capture = true; _capDir = dir; }
 
         // =====================================================================
         protected override void OnLoad()
@@ -153,6 +161,7 @@ namespace Dungeon
             _audio = new Audio();
 
             EnterMenu();
+            if (_capture) { Directory.CreateDirectory(_capDir); SetupShot(0); }
         }
 
         // ---- menu / lifecycle ----------------------------------------------
@@ -326,6 +335,7 @@ namespace Dungeon
 
         void SaveGame()
         {
+            if (_capture) return; // capture mode must never touch the player's real save
             if (_inMenu || _dead || _level == null) return;
             var d = new SaveData
             {
@@ -1027,7 +1037,137 @@ namespace Dungeon
             else if (_inCreate) RenderCreate();
             else RenderHud();
 
+            if (_capture) CaptureTick();
+
             SwapBuffers();
+        }
+
+        // ---- capture driver -------------------------------------------------
+        void CaptureTick()
+        {
+            if (++_capSettle < 6) return; // let a few frames settle before grabbing
+            _capSettle = 0;
+            string path = Path.Combine(_capDir, $"{_capShot}-{CapShots[_capShot]}.bmp");
+            SaveScreenshot(path);
+            _capShot++;
+            if (_capShot >= CapShots.Length) { Close(); return; }
+            SetupShot(_capShot);
+        }
+
+        void SetupShot(int i)
+        {
+            switch (i)
+            {
+                case 0: EnterMenu(); break;              // title / menu
+                case 1: EnterCreate(); break;            // character creation
+                case 2: SetupCaptureDungeon(2, false); break;  // exploring the upper floors
+                case 3: SetupCaptureDungeon(6, true); break;   // the deep, with buffs lit
+            }
+        }
+
+        // Build a deterministic, well-framed in-game scene (no save/music side effects).
+        void SetupCaptureDungeon(int depth, bool buffs)
+        {
+            _inMenu = false; _inCreate = false; _dead = false; _intro = 0f;
+            _name = "ELARA"; _className = "ROGUE";
+            _depth = depth; _gold = 180; _maxHp = 30; _hp = buffs ? 24 : 21;
+            _atkMin = 3; _atkMax = 6; _dodgePct = 25; _critPct = 15;
+            _shield = _torchTurns = _atkTurns = _atkBonus = _regenTurns = _freeze = _haste = 0;
+
+            RebuildDepthTextures(depth);
+            _level = new Level(32, 32, depth, _rng);
+            _seen = new bool[_level.W, _level.H];
+
+            // find the longest straight walkable run to look down
+            int bestLen = -1, bx = _level.Start.x, by = _level.Start.y, bdir = 0;
+            for (int x = 0; x < _level.W; x++)
+                for (int y = 0; y < _level.H; y++)
+                {
+                    if (!_level.IsWalkable(x, y)) continue;
+                    for (int d = 0; d < 4; d++)
+                    {
+                        int len = 0;
+                        while (len < 9 && _level.IsWalkable(x + DX[d] * (len + 1), y + DY[d] * (len + 1))) len++;
+                        if (len > bestLen) { bestLen = len; bx = x; by = y; bdir = d; }
+                    }
+                }
+            _px = bx; _py = by; _dir = bdir;
+            _rcx = _px + 0.5f; _rcz = _py + 0.5f; _ryaw = _targetYaw = _dir * MathF.PI / 2f;
+            _anim = false; _pendingDescend = false;
+
+            _visibleWalls.Clear();
+            for (int x = 0; x < _level.W; x++)
+                for (int y = 0; y < _level.H; y++)
+                    if (_level.IsWall(x, y) && TouchesOpen(x, y)) _visibleWalls.Add((x, y));
+
+            // stage a couple of foes and some loot down the corridor
+            _enemies.Clear(); _items.Clear();
+            void Foe(int ahead, int side, EnemyKind k, string name, int hp, int dmg)
+            {
+                int ex = _px + DX[_dir] * ahead + DX[(_dir + 1) % 4] * side;
+                int ey = _py + DY[_dir] * ahead + DY[(_dir + 1) % 4] * side;
+                if (_level.IsWalkable(ex, ey))
+                    _enemies.Add(new Enemy { X = ex, Y = ey, Rx = ex, Ry = ey, Kind = k, Name = name, Hp = hp, MaxHp = hp, Dmg = dmg, MoveEvery = 1 });
+            }
+            void Loot(int ahead, int side, ItemKind k, int val)
+            {
+                int ix = _px + DX[_dir] * ahead + DX[(_dir + 1) % 4] * side;
+                int iy = _py + DY[_dir] * ahead + DY[(_dir + 1) % 4] * side;
+                if (_level.IsWalkable(ix, iy)) _items.Add(new Item { X = ix, Y = iy, Kind = k, Value = val });
+            }
+            if (!buffs)
+            {
+                Foe(3, 0, EnemyKind.Rat, "RAT", 7, 2);
+                Loot(2, 0, ItemKind.Gold, 20);
+                Loot(1, 0, ItemKind.Potion, 10);
+            }
+            else
+            {
+                Foe(4, 0, EnemyKind.Skeleton, "SKELETON", 22, 6);
+                Foe(3, 0, EnemyKind.Slime, "SLIME", 18, 5);
+                Loot(2, 0, ItemKind.Shield, 5);
+                Loot(1, 0, ItemKind.Gem, 90);
+                _shield = 3; _torchTurns = 50; _regenTurns = 15; _atkBonus = 3; _atkTurns = 30;
+            }
+
+            MarkSeen();
+            Log(buffs ? "THE AIR TURNS COLD..." : "SOMETHING SKITTERS AHEAD", new Vector4(1f, 0.85f, 0.5f, 1f));
+        }
+
+        // Read the back buffer and write it out as a 24-bit BMP (no external deps).
+        void SaveScreenshot(string path)
+        {
+            int w = FramebufferSize.X, h = FramebufferSize.Y;
+            var rgba = new byte[w * h * 4];
+            GL.PixelStore(PixelStoreParameter.PackAlignment, 1);
+            GL.ReadPixels(0, 0, w, h, PixelFormat.Rgba, PixelType.UnsignedByte, rgba);
+
+            int rowPad = (4 - (w * 3) % 4) % 4;
+            int imgSize = (w * 3 + rowPad) * h;
+            using var fs = new FileStream(path, FileMode.Create);
+            using var bw = new BinaryWriter(fs);
+            bw.Write((byte)'B'); bw.Write((byte)'M');
+            bw.Write(14 + 40 + imgSize);        // file size
+            bw.Write(0);                         // reserved
+            bw.Write(14 + 40);                   // pixel data offset
+            bw.Write(40);                        // DIB header size
+            bw.Write(w); bw.Write(h);            // width, height (bottom-up)
+            bw.Write((short)1); bw.Write((short)24);
+            bw.Write(0); bw.Write(imgSize);
+            bw.Write(2835); bw.Write(2835);      // ~72 DPI
+            bw.Write(0); bw.Write(0);
+            // ReadPixels gives rows bottom-to-top already — matches BMP order.
+            var pad = new byte[rowPad];
+            for (int y = 0; y < h; y++)
+            {
+                int row = y * w * 4;
+                for (int x = 0; x < w; x++)
+                {
+                    int p = row + x * 4;
+                    bw.Write(rgba[p + 2]); bw.Write(rgba[p + 1]); bw.Write(rgba[p]); // BGR
+                }
+                if (rowPad > 0) bw.Write(pad);
+            }
         }
 
         void RenderWorld(Matrix4 view, Matrix4 proj, Vector3 eye, float torch)

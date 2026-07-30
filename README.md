@@ -7,6 +7,17 @@ in code, so there are **no external asset files**.
 
 ![style](https://img.shields.io/badge/OpenGL-4.1_core-blue) ![lang](https://img.shields.io/badge/C%23-.NET_10-purple)
 
+## Screenshots
+
+| Exploring the upper floors | Deeper down, buffs lit |
+|:--:|:--:|
+| ![Exploring a torchlit corridor — a rat and loot ahead](screenshots/2-explore.png) | ![The deeper floors — a slime and skeleton, with shield, torch-oil and regen active](screenshots/3-depths.png) |
+| **Title menu** | **Create your hero** |
+| ![Title menu](screenshots/0-menu.png) | ![Point-buy character creation](screenshots/1-hero.png) |
+
+*Bump/normal-mapped stonework, a single torch point-light with distance falloff,
+and camera-facing alpha-cutout sprites — all procedurally generated, no asset files.*
+
 ## Play
 
 ```bash

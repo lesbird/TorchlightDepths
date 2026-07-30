@@ -5,6 +5,9 @@ obj/
 # Published / distributable builds
 dist/
 
+# Video recordings (large; keep out of git)
+mov/
+
 # Local Claude Code settings
 .claude/settings.local.json
 

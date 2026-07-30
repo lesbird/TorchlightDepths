@@ -1,0 +1,80 @@
+<h1>Torchlight Depths</h1>
+
+<p><strong>A first-person, grid-based dungeon crawler in the spirit of <em>Dungeon Master</em> and <em>Eye of the Beholder</em> — carved entirely out of code.</strong></p>
+
+<p>Descend into a procedurally generated dungeon lit by nothing but the torch in your hand. Every floor is larger, darker, and deadlier than the last. The light falls off with distance, so the black ahead of you always holds a little dread — and something is usually waiting in it.</p>
+
+<p>How deep can you get?</p>
+
+<h2>⚔️ Step, turn, and fight</h2>
+
+<p>Movement is classic grid-based crawling: step forward, turn, strafe. Combat is as direct as it gets — <strong>bump into a monster to attack it.</strong> Rats and bats haunt the upper floors; slimes and skeletons wait below. Every enemy you don't put down takes a step toward you each turn, so hesitation costs blood.</p>
+
+<h2>🧙 Build your hero</h2>
+
+<p>Roll a new adventurer with a <strong>point-buy</strong> budget spread across four attributes:</p>
+
+<ul>
+  <li><strong>Strength</strong> — how hard you hit</li>
+  <li><strong>Dexterity</strong> — your chance to dodge a blow entirely</li>
+  <li><strong>Vitality</strong> — raw health</li>
+  <li><strong>Luck</strong> — critical hits <em>and</em> better loot</li>
+</ul>
+
+<p>Your <strong>class is auto-assigned</strong> from your strongest attribute — Warrior, Rogue, Guardian, or Trickster — each with its own passive edge. Reroll for a random spread, or min-max your way to a specialist. It's all previewed live as you spend.</p>
+
+<h2>💎 Loot the dark</h2>
+
+<p>Grab a wide range of pickups, most of which take effect the instant you step on them:</p>
+
+<ul>
+  <li><strong>Potions, bread &amp; hearts</strong> to heal and grow your max HP</li>
+  <li><strong>Gold &amp; gems</strong> for score — and to buy your way back from death</li>
+  <li><strong>Blades &amp; whetstones</strong> to sharpen your attack</li>
+  <li><strong>Shields</strong> that soak the next few hits, <strong>torch oil</strong> to burn brighter and farther, <strong>healing herbs</strong> that regen over time</li>
+  <li><strong>Hourglass</strong> to freeze every enemy, <strong>boots of haste</strong> to move twice per monster turn</li>
+  <li><strong>Fire scrolls</strong> that erupt on pickup and <strong>maps</strong> that reveal the whole floor</li>
+</ul>
+
+<p>Fall in battle? <strong>Spend your gold to revive</strong> right where you dropped — or roll a fresh hero and start the descent over.</p>
+
+<h2>🔥 Every pixel and note made from scratch</h2>
+
+<p>There are <strong>no asset files.</strong> Every texture, sprite, and font glyph is generated in code. Every sound effect is synthesized at startup by a tiny software synth — footsteps, sword swings, coins, the death arpeggio, a low cave drone. And <strong>every level composes its own music</strong>: seeded by depth, it picks a tempo, a minor or Phrygian scale, a chord progression, and a wandering melody, rendered on a background thread so the descent never hitches.</p>
+
+<p>Under the hood it's <strong>C# and hand-written OpenGL 4.1</strong> — a single flickering torch point-light drives all shading over bump-mapped stonework, with camera-facing sprites and smoothly tweened grid movement.</p>
+
+<h2>Features</h2>
+
+<ul>
+  <li>Procedurally generated dungeons that shift palette as you go deeper</li>
+  <li>Point-buy character creation with four classes</li>
+  <li>A dozen+ interactive items and timed power-ups</li>
+  <li>Torch-lit line-of-sight and a minimap that fills in as you explore</li>
+  <li>Gold-fueled revival system and permadeath saves</li>
+  <li>Fully procedural graphics, sound effects, <strong>and</strong> per-level music</li>
+  <li>Auto-saves every floor — pick <strong>Continue</strong> to resume your exact run</li>
+</ul>
+
+<h2>Controls</h2>
+
+<table>
+  <thead>
+    <tr><th>Key</th><th>Action</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>W / Up</td><td>Step forward (bump to attack)</td></tr>
+    <tr><td>S / Down</td><td>Step back</td></tr>
+    <tr><td>A / Left</td><td>Turn left</td></tr>
+    <tr><td>D / Right</td><td>Turn right</td></tr>
+    <tr><td>Q / E</td><td>Strafe left / right</td></tr>
+    <tr><td>Space / F</td><td>Attack the tile ahead</td></tr>
+    <tr><td>M</td><td>Toggle music</td></tr>
+    <tr><td>F11</td><td>Toggle fullscreen / windowed</td></tr>
+    <tr><td>Esc</td><td>Pause to menu (auto-saves)</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<p><em>Made with C#, .NET, and OpenGL. No external assets — the whole world is generated when you press New Game.</em></p>

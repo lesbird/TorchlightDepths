@@ -1,0 +1,103 @@
+<h1>Running Torchlight Depths</h1>
+
+<p>Torchlight Depths ships as <strong>self-contained</strong> builds — the .NET runtime, OpenTK, and native audio (OpenAL-Soft) are all bundled, so there's <strong>nothing to install</strong> to play a prebuilt download. There are also no external asset files: the whole game is generated in code.</p>
+
+<p>The game launches <strong>fullscreen at 1920×1080</strong>. Press <code>F11</code> for a window, <code>Esc</code> to pause to the menu (which auto-saves), and <code>M</code> to toggle music.</p>
+
+<hr>
+
+<h2>Windows (64-bit)</h2>
+
+<p><strong>Prebuilt:</strong></p>
+
+<ol>
+  <li>Download <code>TorchlightDepths-windows-x64.zip</code>.</li>
+  <li>Right-click the .zip → <strong>Extract All…</strong> (extract it somewhere real, like your Desktop — don't run it from inside the zip preview).</li>
+  <li>Double-click <strong><code>Dungeon.exe</code></strong>.</li>
+</ol>
+
+<p>If Windows SmartScreen shows <em>"Windows protected your PC"</em> (the build is unsigned), click <strong>More info → Run anyway</strong>.</p>
+
+<p>The folder also contains <code>OpenAL-Soft-LICENSE.txt</code> — audio works out of the box, no separate OpenAL install needed.</p>
+
+<hr>
+
+<h2>macOS</h2>
+
+<p>There are two builds — pick the one for your Mac:</p>
+
+<ul>
+  <li><strong>Apple Silicon</strong> (M1/M2/M3/M4): <code>TorchlightDepths-macos-arm64.dmg</code> — macOS 11+</li>
+  <li><strong>Intel</strong>: <code>TorchlightDepths-macos-x64.dmg</code> — macOS 10.15+</li>
+</ul>
+
+<blockquote>
+  <p>Not sure which? Apple menu → <strong>About This Mac</strong>. "Apple M…" chip = arm64; "Intel" = x64.</p>
+</blockquote>
+
+<p><strong>Install:</strong></p>
+
+<ol>
+  <li>Double-click the <code>.dmg</code>.</li>
+  <li>Drag <strong>Torchlight Depths</strong> onto the <strong>Applications</strong> shortcut.</li>
+  <li>Launch it from Applications.</li>
+</ol>
+
+<p><strong>First launch — the app is unsigned</strong>, so Gatekeeper will block it with <em>"…cannot be opened because the developer cannot be verified."</em> Get past it one of these ways:</p>
+
+<ul>
+  <li><strong>Right-click</strong> (or Control-click) the app → <strong>Open</strong> → <strong>Open</strong> in the dialog. You only need to do this once.</li>
+  <li>Or: <strong>System Settings → Privacy &amp; Security</strong>, scroll down, and click <strong>Open Anyway</strong> next to the Torchlight Depths message.</li>
+</ul>
+
+<p>If macOS still refuses (some newer versions quarantine downloaded apps hard), open <strong>Terminal</strong> and run:</p>
+
+<pre><code>xattr -dr com.apple.quarantine "/Applications/TorchlightDepths.app"</code></pre>
+
+<p>then launch normally.</p>
+
+<hr>
+
+<h2>Linux (64-bit)</h2>
+
+<p>There's no prebuilt Linux download, but it runs great from source — see below. You'll need an OpenGL 4.1-capable GPU/driver and system OpenAL for sound (<code>sudo apt install libopenal1</code> on Debian/Ubuntu; the game runs silently if it's missing).</p>
+
+<hr>
+
+<h2>Running from source (any platform)</h2>
+
+<p>Requires the <strong>.NET 10 SDK</strong> (<a href="https://dotnet.microsoft.com/download">https://dotnet.microsoft.com/download</a>). From the project folder:</p>
+
+<pre><code>dotnet run -c Release</code></pre>
+
+<p>The first run restores the OpenTK NuGet package, then builds and launches. That's all you need on Windows, macOS, or Linux.</p>
+
+<hr>
+
+<h2>Building your own packages</h2>
+
+<p><code>build.sh</code> produces the distributable packages — a Windows <code>.zip</code> and drag-to-install macOS <code>.dmg</code>s (arm64 + x64), each a single self-contained executable:</p>
+
+<pre><code>./build.sh            # version defaults to 1.0.0
+./build.sh 1.1.0      # stamp a specific version</code></pre>
+
+<p>Requires the .NET SDK. The <code>.dmg</code> step uses <code>hdiutil</code>, so it only runs on a macOS host — on Linux/Windows the script builds the macOS binaries but skips the <code>.dmg</code> packaging.</p>
+
+<hr>
+
+<h2>Saves</h2>
+
+<p>Your run auto-saves at the start of every floor and whenever you leave the game. The save file lives at:</p>
+
+<table>
+  <thead>
+    <tr><th>Platform</th><th>Location</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Windows</td><td><code>%APPDATA%\TorchlightDepths\save.json</code></td></tr>
+    <tr><td>macOS</td><td><code>~/.config/TorchlightDepths/save.json</code></td></tr>
+    <tr><td>Linux</td><td><code>~/.config/TorchlightDepths/save.json</code></td></tr>
+  </tbody>
+</table>
+
+<p>Pick <strong>Continue</strong> from the menu to resume exactly where you left off. Dying deletes the save — a fallen hero can't be continued (unless you spend gold to revive on the death screen).</p>

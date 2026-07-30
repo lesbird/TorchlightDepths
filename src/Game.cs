@@ -79,7 +79,7 @@ namespace Dungeon
         bool _pendingDescend;
 
         // ---- fx / ui --------------------------------------------------------
-        float _time, _screenFlash, _descendFlash, _intro;
+        float _time, _screenFlash, _descendFlash, _intro, _levelBanner;
         bool _dead;
         struct Msg { public string Text; public Vector4 Color; public float Age; }
         readonly List<Msg> _log = new();
@@ -489,6 +489,7 @@ namespace Dungeon
             if (_screenFlash > 0) _screenFlash = Math.Max(0, _screenFlash - dt * 1.6f);
             if (_descendFlash > 0) _descendFlash = Math.Max(0, _descendFlash - dt * 1.2f);
             if (_intro > 0) _intro -= dt;
+            if (_levelBanner > 0) _levelBanner -= dt;
             for (int i = _log.Count - 1; i >= 0; i--)
             {
                 var m = _log[i]; m.Age += dt; _log[i] = m;
@@ -997,6 +998,7 @@ namespace Dungeon
         void BuildLevel()
         {
             _level = new Level(32, 32, _depth, _rng);
+            _levelBanner = 2.8f; // big centered "ENTERING DEPTH x" announcement
             _seen = new bool[_level.W, _level.H];
             _enemies.Clear(); _items.Clear();
             _px = _level.Start.x; _py = _level.Start.y; _dir = 0;
@@ -1457,6 +1459,18 @@ namespace Dungeon
 
             DrawMinimap(W, H, ui);
             DrawCrosshair(W, H, ui);
+
+            // ---- entering-a-new-depth banner (big, centered, fades out)
+            if (_levelBanner > 0 && !_dead)
+            {
+                float a = Math.Clamp(_levelBanner, 0f, 1f); // hold, then fade over the last second
+                var col = new Vector4(1f, 0.85f, 0.5f, a);
+                var shadow = new Vector4(0f, 0f, 0f, a * 0.6f);
+                float cy = H * 0.42f, sc = 5f * ui;
+                string msg = $"ENTERING DEPTH {_depth}";
+                _hud.TextCentered(msg, W / 2f + 3 * ui, cy + 3 * ui, sc, shadow); // drop shadow
+                _hud.TextCentered(msg, W / 2f, cy, sc, col);
+            }
 
             // ---- intro / controls hint
             if (_intro > 0)

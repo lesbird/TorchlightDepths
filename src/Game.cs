@@ -1333,7 +1333,7 @@ namespace Dungeon
             var gold = new Vector4(1f, 0.82f, 0.45f, 1f);
             var dim = new Vector4(0.7f, 0.72f, 0.8f, 1f);
             _hud.TextCentered("TORCHLIGHT DEPTHS", W / 2f, H * 0.2f, 5.2f * ui, gold);
-            _hud.TextCentered("A CLAUDE DUNGEON CRAWLER", W / 2f, H * 0.2f + 64 * ui, 1.6f * ui, dim);
+            _hud.TextCentered("A TORCHLIT DUNGEON CRAWLER", W / 2f, H * 0.2f + 64 * ui, 1.6f * ui, dim);
 
             // mouse hover overrides keyboard selection for the highlight
             var (mx, my) = MouseFb();

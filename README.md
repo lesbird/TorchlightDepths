@@ -176,6 +176,35 @@ The app icon is rendered by the game itself. `dotnet run -c Release -- --icon ic
 draws one square, HUD-free frame (a skeleton in a torchlit corridor). Convert it
 with `sips -s format png -Z 1024 icon.bmp --out ios/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`.
 
+### Publishing to the App Store
+
+There's no Xcode project. `dotnet publish` produces the signed `.ipa` directly:
+
+```bash
+ios/build-appstore.sh 1             # build number 1 -> ios/bin/Release/net10.0-ios/ios-arm64/publish/TorchlightDepths.ipa
+ios/build-appstore.sh 2 --upload    # build, validate and upload with an App Store Connect API key
+```
+
+One-time setup, on the team that owns `com.lesbird.*`:
+
+1. **Apple Distribution certificate.** In Xcode go to *Settings → Accounts →* your team *→ Manage
+   Certificates → + → Apple Distribution*. You don't need a project open for this. It
+   puts the certificate and its private key in your keychain.
+2. **App ID.** On developer.apple.com go to *Identifiers → +* and register `com.lesbird.torchlightdepths`.
+   It needs no extra capabilities.
+3. **Provisioning profile.** Go to *Profiles → + → App Store Connect* and pick that App ID and the
+   distribution certificate. Download the profile and double-click it to install.
+4. **App record.** In App Store Connect go to *My Apps → + New App* (iOS) and use the same bundle ID.
+5. **Uploading.** Either drag the `.ipa` into Apple's **Transporter** app, or create an API key
+   (*Users and Access → Integrations → App Store Connect API*, role App Manager), save
+   `AuthKey_<id>.p8` in `~/.appstoreconnect/private_keys/`, and export `ASC_KEY_ID` and
+   `ASC_ISSUER_ID` for `--upload`.
+
+Each upload needs a higher build number. The marketing version is
+`ApplicationDisplayVersion` in `ios/TorchlightDepths.iOS.csproj`. The privacy manifest
+(`ios/PrivacyInfo.xcprivacy`) and the export-compliance flag in `Info.plist` are
+already set up. The store copy and screenshots are in `appstore/`.
+
 ## Project layout
 
 | File                | Responsibility                                            |

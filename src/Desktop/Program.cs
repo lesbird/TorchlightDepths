@@ -29,7 +29,7 @@ namespace Dungeon
             {
                 ClientSize = iconPath != null ? new Vector2i(1024, 1024)
                            : capture ? new Vector2i(1280, 720) : new Vector2i(1920, 1080),
-                Title = "Torchlight Depths — a Claude dungeon crawler",
+                Title = "Torchlight Depths",
                 // macOS supports up to OpenGL 4.1 core, forward-compatible only.
                 API = ContextAPI.OpenGL,
                 APIVersion = new Version(4, 1),

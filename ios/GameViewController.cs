@@ -56,9 +56,13 @@ namespace Dungeon
             _game = new Game(_audio, touchUI: true);
             // `simctl launch <device> <bundle-id> --capture`: scripted touch walkthrough with
             // screenshots written to the app's Documents/capture folder.
-            if (Array.IndexOf(NSProcessInfo.ProcessInfo.Arguments, "--capture") >= 0)
-                _game.EnableCapture(System.IO.Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "capture"));
+            // `--appstore`: the staged App Store screenshot set, into Documents/appstore.
+            var args = NSProcessInfo.ProcessInfo.Arguments;
+            var docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            if (Array.IndexOf(args, "--appstore") >= 0)
+                _game.EnableAppStoreCapture(System.IO.Path.Combine(docs, "appstore"));
+            else if (Array.IndexOf(args, "--capture") >= 0)
+                _game.EnableCapture(System.IO.Path.Combine(docs, "capture"));
             UpdateSizes();
             _game.Load();
 

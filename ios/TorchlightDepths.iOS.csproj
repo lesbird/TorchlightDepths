@@ -29,6 +29,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- App Store privacy manifest: must sit at the root of the .app bundle. -->
+    <BundleResource Include="PrivacyInfo.xcprivacy" LogicalName="PrivacyInfo.xcprivacy" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Only OpenTK's math library: its windowing (GLFW) and OpenAL don't exist on iOS, and its
          GL bindings need a JIT — GLES.cs provides AOT-safe GL entry points in their place. -->
     <PackageReference Include="OpenTK.Mathematics" Version="4.8.2" />

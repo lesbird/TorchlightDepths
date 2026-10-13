@@ -19,7 +19,7 @@ CODESIGN_PROVISION="${CODESIGN_PROVISION:-9b02843d-d757-4a01-a5fa-8ba82ea71d34}"
 
 # pick a connected device (the identifier is the third column of `devicectl list devices`)
 DEVICE=$(xcrun devicectl list devices 2>/dev/null | grep -E "connected|available \(paired\)" \
-         | grep -F -- "$MATCH" | head -1 | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}' | head -1)
+         | grep -F -- "$MATCH" | head -1 | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}' | head -1 || true)
 if [[ -z "$DEVICE" ]]; then
   echo "error: no connected device${MATCH:+ matching '$MATCH'} (see: xcrun devicectl list devices)" >&2
   exit 1

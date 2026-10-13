@@ -146,7 +146,7 @@ from the same `src/` code, played in landscape with touch controls:
 
 The hero's name is typed on an **in-game keyboard** drawn in the game's own style
 (letters, numbers, space, DEL). Tap the name box to bring it up. On the death
-screen, **REVIVE** and **NEW HERO** are buttons. A hardware keyboard on an iPad
+screen, **REVIVE**, **NEW HERO** and **BUY GOLD** are buttons. A hardware keyboard on an iPad
 works the same way as on desktop. Leaving the app saves your run and drops you
 to the menu.
 
@@ -156,6 +156,8 @@ Requirements: Xcode and the .NET iOS workload (`dotnet workload install ios`).
 ios/run-sim.sh                            # build + launch in the iPhone 17 Pro simulator
 ios/run-sim.sh "iPad Pro 13-inch (M5)"    # ...or any other simulator
 ios/run-sim.sh "iPhone 17" --capture      # scripted touch walkthrough with screenshots
+ios/run-sim.sh "iPhone 17" --fakestore    # gold shop with a stand-in store (purchases always succeed)
+ios/run-sim.sh "iPhone 17" --fakegc       # leaderboards filled with made-up rivals
 ```
 
 The Simulator renders OpenGL ES on the CPU, so it runs at a few frames per second
@@ -168,37 +170,110 @@ ios/run-device.sh              # first connected device
 ios/run-device.sh iPadAir4     # or match part of the device name
 ```
 
-This signs with an Apple Development certificate and a development provisioning
-profile that lists the device (a wildcard `*` team profile works). Set
-`CODESIGN_KEY` / `CODESIGN_PROVISION` to use different ones.
+It signs through Xcode's automatic signing, with the Apple account signed in to Xcode.
+Xcode creates the development profile for the app (Game Center needs one made for this
+app, not a wildcard profile). The device must be registered on the team.
 
 The app icon is rendered by the game itself. `dotnet run -c Release -- --icon icon.bmp`
 draws one square, HUD-free frame (a skeleton in a torchlit corridor). Convert it
 with `sips -s format png -Z 1024 icon.bmp --out ios/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`.
 
+### In-app purchases (gold)
+
+The iOS build sells gold through StoreKit. **BUY GOLD** is on the title menu and the
+death screen. All four packs are consumables:
+
+| Product ID                                  | Price | Gives                       |
+|---------------------------------------------|-------|-----------------------------|
+| `com.lesbird.torchlightdepths.gold500`      | $0.99 | 500 gold                    |
+| `com.lesbird.torchlightdepths.gold2000`     | $1.99 | 2000 gold                   |
+| `com.lesbird.torchlightdepths.gold5000`     | $2.99 | 5000 gold                   |
+| `com.lesbird.torchlightdepths.gold10000`    | $4.99 | 10000 gold + doubles max HP |
+
+A purchase goes into a small wallet (`wallet.json`, next to the save) first. It
+reaches the hero as soon as one is alive in the dungeon. A pack bought on the death
+screen counts toward REVIVE right away, and if you pick NEW HERO instead, the new
+hero gets it. The StoreKit transaction is only finished once the wallet is saved,
+so an interrupted purchase is redelivered on the next launch and not lost. The
+pack list is `GoldPacks` in `src/Store.cs`.
+
+Setting up the products in App Store Connect:
+
+1. Sign the **Paid Applications** agreement and fill in banking and tax details
+   (*Business*). Until that's done, StoreKit returns no products and the shop shows
+   STORE UNAVAILABLE.
+2. Under the app, go to *Monetization → In-App Purchases → +*. Choose **Consumable**, and
+   enter each product ID above with its price. Give each one a display name and a
+   description, and use `appstore/iap-review-shop.png` as the review screenshot.
+3. Submit the in-app purchases together with an app version. A first purchase can't be
+   reviewed on its own. Suggested copy is in `appstore/listing.md`.
+
+To test real purchases before release, create a **Sandbox** tester (*Users and Access →
+Sandbox*). Sign in to it on the device under *Settings → Developer → Sandbox Apple
+Account*, then install with `ios/run-device.sh`. The products must exist in App Store
+Connect. They don't need to be approved yet. In the Simulator, use `--fakestore`.
+
+### Game Center leaderboards
+
+**LEADERBOARDS** on the title menu opens an in-game panel drawn in the game's style, not
+Game Center's own screens. It has a tab for each board. Each tab shows the top ten, your
+rank out of the total number of players on that board, and your own total. All four
+are lifetime totals across every hero, kept in `stats.json` next to the save:
+
+| Leaderboard ID                              | Tab     | Counts                                      |
+|---------------------------------------------|---------|---------------------------------------------|
+| `com.lesbird.torchlightdepths.deepest`      | DEEPEST | deepest floor ever reached                  |
+| `com.lesbird.torchlightdepths.kills`        | KILLS   | monsters slain (fire scrolls included)      |
+| `com.lesbird.torchlightdepths.gold`         | GOLD    | gold found in the dungeon (bought gold doesn't count) |
+| `com.lesbird.torchlightdepths.deaths`       | DEATHS  | times a hero has fallen                     |
+
+Scores are posted at checkpoints: each new floor, each death, and every visit to the
+menu. The player is signed in at launch. If they aren't signed in yet, the panel
+offers a SIGN IN button that brings up Game Center's sign-in sheet. Game Center keeps
+the best score posted on each board, and the game reads those back. So after a
+reinstall or on a new device, the totals carry on from where they were instead of
+starting over. The board list is `Boards` in `src/Leaderboards.cs`, and the Game Center
+code is in `ios/GameCenter.cs`.
+
+Setting up the leaderboards in App Store Connect:
+
+1. The App ID needs the **Game Center** capability (*Identifiers →* the app). New explicit
+   App IDs have it on by default. The app is built with the entitlement in
+   `ios/GameCenter.entitlements`.
+2. Under the app, go to *Services → Game Center → Leaderboards → +*. Create four
+   **Classic** leaderboards with the IDs above. Use *Score format: Integer*,
+   *Submission type: Best score*, and *Sort order: High to low*. Each needs an English
+   localization; use the display names in `appstore/listing.md`.
+3. On the app version page, turn on **Game Center**, and add the leaderboards to it
+   when you submit.
+
+`ios/run-device.sh` signs through Xcode's automatic signing with a development profile
+for this app, so Game Center works on test devices too. Until the app and its
+leaderboards exist in App Store Connect, the panel says Game Center isn't set up for
+this app yet. Sandbox leaderboards work as soon as they're created.
+
 ### Publishing to the App Store
 
-There's no Xcode project. `dotnet publish` produces the signed `.ipa` directly:
+There's no Xcode project. `ios/build-appstore.sh` builds the app with `dotnet publish`,
+wraps it in an Xcode archive, and has `xcodebuild -exportArchive` sign it for the App Store:
 
 ```bash
-ios/build-appstore.sh 1             # build number 1 -> ios/bin/Release/net10.0-ios/ios-arm64/publish/TorchlightDepths.ipa
-ios/build-appstore.sh 2 --upload    # build, validate and upload with an App Store Connect API key
+ios/build-appstore.sh 1             # build 1 -> ios/bin/AppStore/export/TorchlightDepths.ipa
+ios/build-appstore.sh 2 --upload    # build 2, signed and uploaded to App Store Connect
 ```
 
-One-time setup, on the team that owns `com.lesbird.*`:
+Signing uses Xcode's **automatic signing** with the Apple account signed in to Xcode
+(*Settings → Accounts*). That gives it Xcode's cloud-managed Apple Distribution
+certificate, plus an App Store profile for `com.lesbird.torchlightdepths`, which Xcode
+creates or downloads itself. So you don't need a distribution certificate in the
+keychain or a hand-made profile.
 
-1. **Apple Distribution certificate.** In Xcode go to *Settings → Accounts →* your team *→ Manage
-   Certificates → + → Apple Distribution*. You don't need a project open for this. It
-   puts the certificate and its private key in your keychain.
-2. **App ID.** On developer.apple.com go to *Identifiers → +* and register `com.lesbird.torchlightdepths`.
-   It needs no extra capabilities.
-3. **Provisioning profile.** Go to *Profiles → + → App Store Connect* and pick that App ID and the
-   distribution certificate. Download the profile and double-click it to install.
-4. **App record.** In App Store Connect go to *My Apps → + New App* (iOS) and use the same bundle ID.
-5. **Uploading.** Either drag the `.ipa` into Apple's **Transporter** app, or create an API key
-   (*Users and Access → Integrations → App Store Connect API*, role App Manager), save
-   `AuthKey_<id>.p8` in `~/.appstoreconnect/private_keys/`, and export `ASC_KEY_ID` and
-   `ASC_ISSUER_ID` for `--upload`.
+Before the first upload:
+
+1. **App record.** In App Store Connect go to *My Apps → + New App* (iOS), with bundle ID
+   `com.lesbird.torchlightdepths`.
+2. **Uploading.** Either drag the `.ipa` into Apple's **Transporter** app, or use
+   `--upload`, which goes through the same Xcode account.
 
 Each upload needs a higher build number. The marketing version is
 `ApplicationDisplayVersion` in `ios/TorchlightDepths.iOS.csproj`. The privacy manifest
@@ -213,6 +288,8 @@ already set up. The store copy and screenshots are in `appstore/`.
 | `ios/`              | iOS host: GLKView + OpenGL ES 3.0, AVAudioEngine mixer, touch / scene lifecycle |
 | `src/Game.cs`       | Game loop: movement, combat, AI, levels, rendering, HUD   |
 | `src/Touch.cs`      | Touch controls: swipes, on-screen buttons, name keyboard  |
+| `src/LeaderboardPanel.cs`, `src/Leaderboards.cs` | Leaderboards panel, lifetime stats, `ILeaderboards` (Game Center in `ios/GameCenter.cs`) |
+| `src/Shop.cs`, `src/Store.cs` | Gold shop screen, purchase wallet, `IStore` (StoreKit in `ios/AppStoreKit.cs`) |
 | `src/Dungeon.cs`    | Procedural room-and-corridor level generation             |
 | `src/Gfx.cs`        | Shader / Mesh / Texture helpers (cube, billboard, quads)  |
 | `src/Textures.cs`   | Procedural stone/floor textures and monster/item sprites  |

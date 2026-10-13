@@ -53,7 +53,12 @@ namespace Dungeon
                 foreach (var b in DeathButtons(ui))
                     if (b.enabled && Inside(mx, my, b.x, b.y, b.w, b.h))
                     {
-                        if (b.revive) Revive(); else EnterCreate();
+                        switch (b.kind)
+                        {
+                            case DeathRevive: Revive(); break;
+                            case DeathShop: OpenShop(); break;
+                            default: EnterCreate(); break;
+                        }
                         return true;
                     }
                 return true;
@@ -127,18 +132,22 @@ namespace Dungeon
         }
 
         // ---- death screen buttons --------------------------------------------------------
-        List<(bool revive, bool enabled, string label, float x, float y, float w, float h)> DeathButtons(float ui)
+        const int DeathRevive = 0, DeathNewHero = 1, DeathShop = 2;
+
+        List<(int kind, bool enabled, string label, float x, float y, float w, float h)> DeathButtons(float ui)
         {
             int W = FramebufferSize.X, H = FramebufferSize.Y;
             float bw = 330 * ui, bh = 62 * ui, gap = 28 * ui;
             float x0 = W / 2f - bw - gap / 2f, y = H / 2f + 40 * ui;
             int cost = ReviveCost();
-            bool can = _gold >= cost;
-            return new()
+            bool can = Spendable() >= cost;
+            var list = new List<(int, bool, string, float, float, float, float)>
             {
-                (true, can, can ? $"REVIVE  {cost} GOLD" : $"REVIVE NEEDS {cost}", x0, y, bw, bh),
-                (false, true, "NEW HERO", x0 + bw + gap, y, bw, bh),
+                (DeathRevive, can, can ? $"REVIVE  {cost} GOLD" : $"REVIVE NEEDS {cost}", x0, y, bw, bh),
+                (DeathNewHero, true, "NEW HERO", x0 + bw + gap, y, bw, bh),
             };
+            if (Store != null) list.Add((DeathShop, true, "BUY GOLD", W / 2f - bw / 2f, y + bh + 22 * ui, bw, bh));
+            return list;
         }
 
         void DrawDeathButtons(float ui)

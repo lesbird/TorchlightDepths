@@ -52,6 +52,9 @@ namespace Dungeon
             v1 = ((cy + 1) * Cell - 0.05f) / AtlasH;
         }
 
+        /// <summary>True if the font has a glyph for <paramref name="c"/> (uppercase only).</summary>
+        public static bool CanDraw(char c) => _glyphs.ContainsKey(c);
+
         public void SolidUV(out float u, out float v)
         {
             int idx = 127 - 32, cx = idx % Cols, cy = idx / Cols;
@@ -111,6 +114,7 @@ namespace Dungeon
             [')'] = new[]{".X......","..X.....","...X....","...X....","...X....","..X.....",".X......","........"},
             ['>'] = new[]{"X.......",".X......","..X.....","...X....","..X.....",".X......","X.......","........"},
             ['<'] = new[]{"...X....","..X.....",".X......","X.......",".X......","..X.....","...X....","........"},
+            ['$'] = new[]{"..X.....",".XXXX...","X.X.....",".XXX....","..X.X...","XXXX....","..X.....","........"},
             ['\''] = new[]{".X......",".X......",".X......","........","........","........","........","........"},
         };
     }

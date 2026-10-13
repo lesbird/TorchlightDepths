@@ -108,5 +108,57 @@ namespace Dungeon
         {
             try { if (Exists()) File.Delete(FilePath); } catch { }
         }
+
+        // ---- lifetime totals for the leaderboards
+        static string StatsPath => Path.Combine(Dir, "stats.json");
+
+        public static LifetimeStats LoadStats()
+        {
+            try
+            {
+                if (File.Exists(StatsPath))
+                    return JsonSerializer.Deserialize<LifetimeStats>(File.ReadAllText(StatsPath)) ?? new LifetimeStats();
+            }
+            catch { }
+            return new LifetimeStats();
+        }
+
+        public static void SaveStats(LifetimeStats s)
+        {
+            try
+            {
+                Directory.CreateDirectory(Dir);
+                File.WriteAllText(StatsPath, JsonSerializer.Serialize(s));
+            }
+            catch { /* best-effort */ }
+        }
+
+        // ---- purchased gold not yet handed to a hero (survives death, unlike the run save)
+        static string WalletPath => Path.Combine(Dir, "wallet.json");
+
+        public static WalletData LoadWallet()
+        {
+            try
+            {
+                if (File.Exists(WalletPath))
+                    return JsonSerializer.Deserialize<WalletData>(File.ReadAllText(WalletPath)) ?? new WalletData();
+            }
+            catch { }
+            return new WalletData();
+        }
+
+        /// <summary>Returns false if the wallet couldn't be written (the purchase is then left unfinished).</summary>
+        public static bool SaveWallet(WalletData w)
+        {
+            try
+            {
+                Directory.CreateDirectory(Dir);
+                string tmp = WalletPath + ".tmp";
+                File.WriteAllText(tmp, JsonSerializer.Serialize(w));
+                File.Move(tmp, WalletPath, overwrite: true);
+                return true;
+            }
+            catch { return false; }
+        }
     }
 }

@@ -20,6 +20,11 @@
     <!-- Assets.xcassets/AppIcon.appiconset, rendered by the game itself (desktop build, icon mode; see README) -->
     <AppIcon>AppIcon</AppIcon>
 
+    <!-- Game Center. A wildcard (*) profile can't carry this entitlement; run-device.sh and
+         build-appstore.sh re-sign through Xcode with a profile for this app, which can.
+         -p:GameCenter=false leaves it out. -->
+    <CodesignEntitlements Condition="'$(GameCenter)' != 'false'">GameCenter.entitlements</CodesignEntitlements>
+
     <!-- OpenGL ES / GLKit are deprecated by Apple but still shipped; silence the obsolete warnings. -->
     <NoWarn>$(NoWarn);CA1422;CA1416;CS0618</NoWarn>
   </PropertyGroup>

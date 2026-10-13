@@ -10,6 +10,7 @@ namespace Dungeon
     public sealed partial class Game
     {
         int _tcStep, _tcWait;
+        SaveData _capSave; // capture's stand-in for the save file (capture never touches the real one)
 
         void Tap(float x, float y) { PointerDown(x, y); PointerUp(x, y); }
         void TapCenter((float x, float y, float w, float h) r) => Tap(r.x + r.w / 2f, r.y + r.h / 2f);
@@ -20,6 +21,24 @@ namespace Dungeon
             PointerDown(x, y);
             for (int i = 1; i <= 4; i++) PointerMove(x + dx * i / 4f, y + dy * i / 4f);
             PointerUp(x + dx, y + dy);
+        }
+
+        void TapMenu(MenuAction a)
+        {
+            foreach (var b in MenuButtons())
+                if (b.action == a) TapCenter((b.x, b.y, b.w, b.h));
+        }
+
+        void TapBoardTab(int tab)
+        {
+            foreach (var b in BoardsButtons())
+                if (b.kind == BoardsTab && b.tab == tab) TapCenter((b.x, b.y, b.w, b.h));
+        }
+
+        void TapShopRow(int idx)
+        {
+            foreach (var r in ShopRows())
+                if (r.idx == idx) TapCenter((r.x, r.y, r.w, r.h));
         }
 
         void Shot(string name) => SaveScreenshot(Path.Combine(_capDir, $"{_capShot++}-{name}.bmp"));
@@ -62,14 +81,66 @@ namespace Dungeon
                 case 10: Console.WriteLine($"[capture] after swipe up pos=({_px},{_py})"); SwipeBy(0, sw); break; // down -> back
                 case 11: Console.WriteLine($"[capture] after swipe down pos=({_px},{_py})"); Shot("swiped"); break;
                 case 12:
+                    // capture never writes the real save; the menu reads this stand-in instead
+                    _capSave = Snapshot();
+                    _capSave.Gold = 240;
                     foreach (var b in HudButtons(ui))
                         if (b.menu) TapCenter((b.x, b.y, b.w, b.h));
                     break;
-                case 13: Shot("paused"); Console.WriteLine($"[capture] inMenu={_inMenu}"); break;
-                case 14:
-                    _hp = 0; _dead = true; _gold = 500; _inMenu = false; // stage a death screen
+                case 13: Shot("paused"); Console.WriteLine($"[capture] inMenu={_inMenu}"); TapMenu(MenuAction.NewGame); break;
+                case 14: // regression: NEW GAME, reroll, BACK, then CONTINUE must resume the paused run
+                    foreach (var b in CreateButtons())
+                        if (b.action == CreateAction.Reroll) TapCenter((b.x, b.y, b.w, b.h));
+                    foreach (var b in CreateButtons())
+                        if (b.action == CreateAction.Back) TapCenter((b.x, b.y, b.w, b.h));
                     break;
-                case 15: Shot("dead"); Console.WriteLine("[capture] done"); _capture = false; Close(); break;
+                case 15:
+                    Console.WriteLine($"[capture] after BACK inMenu={_inMenu} inCreate={_inCreate}");
+                    TapMenu(MenuAction.Continue);
+                    break;
+                case 16:
+                    Shot("continued");
+                    Console.WriteLine($"[capture] after CONTINUE inMenu={_inMenu} inCreate={_inCreate} depth={_depth} " +
+                                      $"attrs={_str}/{_dex}/{_vit}/{_luk} saved={_capSave.Str}/{_capSave.Dex}/{_capSave.Vit}/{_capSave.Luk}");
+                    break;
+                case 17:
+                    _hp = 0; _dead = true; _gold = 20; _inMenu = false; // stage a death screen, too poor to revive
+                    break;
+                case 18: Shot("dead"); break;
+                case 19: // the fake store stands in for StoreKit
+                    foreach (var b in DeathButtons(ui))
+                        if (b.kind == DeathShop) TapCenter((b.x, b.y, b.w, b.h));
+                    break;
+                case 20: Shot("shop"); Console.WriteLine($"[capture] inShop={_inShop}"); TapShopRow(0); _tcWait = 40; break;
+                case 21: Console.WriteLine($"[capture] after 500 pack: spendable={Spendable()} msg='{_shopMsg}'"); TapShopRow(3); _tcWait = 40; break;
+                case 22: Shot("bought"); Console.WriteLine($"[capture] after 10000 pack: spendable={Spendable()} doubles={_wallet.HpDoubles}"); TapShopRow(ShopBack); break;
+                case 23:
+                    Console.WriteLine($"[capture] maxHp before revive={_maxHp}");
+                    foreach (var b in DeathButtons(ui))
+                        if (b.kind == DeathRevive) TapCenter((b.x, b.y, b.w, b.h));
+                    break;
+                case 24:
+                    Shot("revived");
+                    Console.WriteLine($"[capture] revived dead={_dead} gold={_gold} hp={_hp}/{_maxHp} wallet={_wallet.Gold}");
+                    _stats = new LifetimeStats { Deepest = 9, Kills = 1240, Gold = 8350, Deaths = 17 }; // a seasoned player
+                    foreach (var b in HudButtons(ui))
+                        if (b.menu) TapCenter((b.x, b.y, b.w, b.h));
+                    break;
+                case 25:
+                    foreach (var b in MenuButtons())
+                        if (b.action == MenuAction.Leaderboards) TapCenter((b.x, b.y, b.w, b.h));
+                    break;
+                case 26: Shot("boards"); Console.WriteLine($"[capture] inBoards={_inBoards} tab={_boardTab}"); TapBoardTab(1); break;
+                case 27: Shot("boards-kills"); TapBoardTab(3); break;
+                case 28:
+                    Shot("boards-deaths");
+                    foreach (var b in BoardsButtons())
+                        if (b.kind == BoardsBack) TapCenter((b.x, b.y, b.w, b.h));
+                    break;
+                case 29:
+                    Console.WriteLine($"[capture] after back inBoards={_inBoards} inMenu={_inMenu}");
+                    Console.WriteLine("[capture] done"); _capture = false; Close();
+                    break;
             }
         }
 
@@ -137,10 +208,12 @@ namespace Dungeon
                 case 8: // title menu, run in progress
                     SetupCaptureDungeon(3, false);
                     _enemies.Clear(); _items.Clear(); // keep the corridor behind the menu clean
-                    _menuSave = new SaveData { Depth = 3 };
+                    _menuSave = new SaveData { Depth = 3, Name = "ELARA", Gold = 240, Hp = 17, MaxHp = 30 };
                     _menuItems.Clear();
                     _menuItems.Add(MenuAction.Continue);
                     _menuItems.Add(MenuAction.NewGame);
+                    _menuItems.Add(MenuAction.Shop);
+                    _menuItems.Add(MenuAction.Leaderboards);
                     _menuSel = 0; _inMenu = true;
                     break;
                 case 9: Shot("title"); Console.WriteLine("[appstore] done"); _capture = false; break;

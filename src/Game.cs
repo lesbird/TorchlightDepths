@@ -99,7 +99,7 @@ namespace Dungeon
         readonly List<Msg> _log = new();
 
         // ---- menu / character creation --------------------------------------
-        enum MenuAction { Continue, NewGame, Quit }
+        enum MenuAction { Continue, NewGame, Shop, Leaderboards, Quit }
         enum CreateAction { Reroll, Begin, Back }
         enum HeroClass { Warrior, Rogue, Guardian, Trickster }
         bool _inMenu = true;
@@ -181,6 +181,7 @@ namespace Dungeon
             _font = new Font();
             _hud = new Hud(_font);
             _audio = new Audio(_audioOut);
+            if (!_capture) { _wallet = SaveSystem.LoadWallet(); _stats = SaveSystem.LoadStats(); }
 
             EnterMenu();
             if (_capture)
@@ -194,11 +195,15 @@ namespace Dungeon
         // ---- menu / lifecycle ----------------------------------------------
         void EnterMenu()
         {
-            SaveGame();                 // capture current run (no-op if none / dead)
-            _menuSave = SaveSystem.Load();
+            SaveGame();                 // capture current run (no-op if none / dead / creating a hero)
+            RecordStats();
+            _inCreate = false; _kbOpen = false; // BACK from character creation lands here too
+            _menuSave = _capture ? _capSave : SaveSystem.Load();
             _menuItems.Clear();
             if (_menuSave != null) _menuItems.Add(MenuAction.Continue);
             _menuItems.Add(MenuAction.NewGame);
+            if (Store != null) _menuItems.Add(MenuAction.Shop);
+            if (Leaderboards != null) _menuItems.Add(MenuAction.Leaderboards);
             if (!TouchUI) _menuItems.Add(MenuAction.Quit); // mobile apps don't quit themselves
             _menuSel = 0;
             _inMenu = true;
@@ -210,6 +215,8 @@ namespace Dungeon
             {
                 case MenuAction.Continue: ContinueGame(); break;
                 case MenuAction.NewGame: EnterCreate(); break;
+                case MenuAction.Shop: OpenShop(); break;
+                case MenuAction.Leaderboards: OpenBoards(); break;
                 case MenuAction.Quit: Close(); break;
             }
         }
@@ -345,7 +352,7 @@ namespace Dungeon
 
             RebuildGeometry();
 
-            _inMenu = false; _dead = false; _intro = 0f;
+            _inMenu = false; _inCreate = false; _dead = false; _intro = 0f;
             StartMusic();
             Log($"WELCOME BACK - DEPTH {_depth}", new Vector4(1f, 0.85f, 0.5f, 1f));
         }
@@ -360,7 +367,15 @@ namespace Dungeon
         void SaveGame()
         {
             if (_capture) return; // capture mode must never touch the player's real save
-            if (_inMenu || _dead || _level == null) return;
+            // Character creation edits the hero fields in place, over the paused run, so saving
+            // then would stamp the half-made hero onto that run.
+            if (_inMenu || _inCreate || _dead || _level == null) return;
+            SaveSystem.Save(Snapshot());
+        }
+
+        // The whole run as a SaveData.
+        SaveData Snapshot()
+        {
             var d = new SaveData
             {
                 Depth = _depth, Hp = _hp, MaxHp = _maxHp, AtkMin = _atkMin, AtkMax = _atkMax, Gold = _gold, Shield = _shield,
@@ -381,7 +396,7 @@ namespace Dungeon
                 });
             foreach (var it in _items)
                 d.Items.Add(new ItemDto { X = it.X, Y = it.Y, Kind = (int)it.Kind, Value = it.Value });
-            SaveSystem.Save(d);
+            return d;
         }
 
         bool[] FlattenSeen()
@@ -515,6 +530,8 @@ namespace Dungeon
         public void Update(float dt)
         {
             _time += dt;
+            PumpStore();
+            PumpLeaderboards();
 
             // hand a finished music track to the audio engine (created on this thread)
             if (_musicTask != null && _musicTask.IsCompleted)
@@ -572,6 +589,8 @@ namespace Dungeon
                 return;
             }
 
+            if (_inShop) { HandleShopKey(key); return; }
+            if (_inBoards) { HandleBoardsKey(key); return; }
             if (_inMenu) { HandleMenuKey(key); return; }
             if (_inCreate) { HandleCreateKey(key); return; }
 
@@ -579,7 +598,7 @@ namespace Dungeon
 
             if (_dead)
             {
-                if (key == Key.C && _gold >= ReviveCost()) Revive();
+                if (key == Key.C && Spendable() >= ReviveCost()) Revive();
                 else if (key == Key.Enter || key == Key.Space) EnterCreate();
                 return;
             }
@@ -660,6 +679,8 @@ namespace Dungeon
         public void PointerDown(float mx, float my)
         {
             _ptrX = mx; _ptrY = my; _ptrHeld = true;
+            if (_inShop) { ShopPointerDown(mx, my); return; }
+            if (_inBoards) { BoardsPointerDown(mx, my); return; }
             if (TouchUI && TouchPointerDown(mx, my)) return;
 
             if (_inMenu)
@@ -715,8 +736,8 @@ namespace Dungeon
         {
             int W = FramebufferSize.X, H = FramebufferSize.Y;
             float ui = H / 720f;
-            float bw = 380 * ui, bh = 62 * ui, gap = 22 * ui;
             int n = _menuItems.Count;
+            float bw = 380 * ui, bh = (n > 3 ? 54 : 62) * ui, gap = (n > 3 ? 14 : 22) * ui;
             float total = n * bh + (n - 1) * gap;
             float startY = H * 0.52f - total / 2f;
             float x = W / 2f - bw / 2f;
@@ -728,6 +749,8 @@ namespace Dungeon
                 {
                     MenuAction.Continue => _menuSave != null ? $"CONTINUE - DEPTH {_menuSave.Depth}" : "CONTINUE",
                     MenuAction.NewGame => "NEW GAME",
+                    MenuAction.Shop => "BUY GOLD",
+                    MenuAction.Leaderboards => "LEADERBOARDS",
                     _ => "QUIT",
                 };
                 list.Add((a, label, x, startY + i * (bh + gap), bw, bh));
@@ -823,6 +846,7 @@ namespace Dungeon
             if (e.Hp <= 0)
             {
                 _enemies.Remove(e);
+                _stats.Kills++;
                 _audio.Play(Sound.Kill, 0.8f, 0.1f);
                 Log($"{e.Name} SLAIN!", new Vector4(0.7f, 1f, 0.7f, 1f));
                 // loot — luck improves the odds
@@ -851,6 +875,7 @@ namespace Dungeon
                 if (e.Hp <= 0)
                 {
                     _enemies.Remove(e);
+                    _stats.Kills++;
                     Log($"{e.Name} IS INCINERATED", new Vector4(1f, 0.7f, 0.4f, 1f));
                 }
             }
@@ -945,6 +970,8 @@ namespace Dungeon
             if (_hp <= 0)
             {
                 _hp = 0; _dead = true;
+                _stats.Deaths++;
+                RecordStats();
                 _audio.Play(Sound.Death, 0.9f);
                 SaveSystem.Delete(); // dead: only a paid revive brings you back
                 Log($"{_name} HAS FALLEN", new Vector4(1f, 0.3f, 0.3f, 1f));
@@ -957,7 +984,8 @@ namespace Dungeon
         void Revive()
         {
             int cost = ReviveCost();
-            if (_gold < cost) return;
+            if (Spendable() < cost) return;
+            bool fromWallet = ApplyWallet(); // purchases made on the death screen
             _gold -= cost;
             _dead = false;
             _hp = _maxHp;
@@ -968,6 +996,7 @@ namespace Dungeon
             _audio.Play(Sound.Power, 0.9f);
             Log($"{_name} IS REVIVED!  -{cost} GOLD", new Vector4(0.7f, 1f, 0.8f, 1f));
             SaveGame(); // re-persist the living run
+            if (fromWallet) CommitWallet();
         }
 
         // ---- items ----------------------------------------------------------
@@ -983,7 +1012,7 @@ namespace Dungeon
                     _audio.Play(Sound.Potion, 0.8f);
                     Log($"POTION +{it.Value} HP", new Vector4(0.6f, 1f, 0.7f, 1f)); break;
                 case ItemKind.Gold:
-                    _gold += it.Value;
+                    _gold += it.Value; _stats.Gold += it.Value;
                     _audio.Play(Sound.Gold, 0.7f, 0.06f);
                     Log($"+{it.Value} GOLD", new Vector4(1f, 0.9f, 0.4f, 1f)); break;
                 case ItemKind.Sword:
@@ -1007,7 +1036,7 @@ namespace Dungeon
                     _audio.Play(Sound.Power, 0.8f);
                     Log("A RING - +4% DODGE & CRIT", new Vector4(0.85f, 0.8f, 1f, 1f)); break;
                 case ItemKind.Gem:
-                    _gold += it.Value;
+                    _gold += it.Value; _stats.Gold += it.Value;
                     _audio.Play(Sound.Gold, 0.8f, 0.05f);
                     Log($"A GLITTERING GEM  +{it.Value} GOLD", new Vector4(0.8f, 0.6f, 1f, 1f)); break;
                 case ItemKind.Whetstone:
@@ -1064,6 +1093,8 @@ namespace Dungeon
             RebuildGeometry();
             SpawnEntities();
             MarkSeen();
+            _stats.Deepest = Math.Max(_stats.Deepest, _depth);
+            RecordStats();
             StartMusic();
             SaveGame();
         }
@@ -1091,7 +1122,10 @@ namespace Dungeon
 
             if (_iconPath != null) { IconTick(); return; } // the world only, no HUD
 
-            if (_inMenu) RenderMenu();
+            // the shop and leaderboards replace the screen they were opened from
+            if (_inShop) RenderShop();
+            else if (_inBoards) RenderBoards();
+            else if (_inMenu) RenderMenu();
             else if (_inCreate) RenderCreate();
             else RenderHud();
 
@@ -1361,6 +1395,14 @@ namespace Dungeon
                 _hud.TextCentered(b.label, b.x + b.w / 2f, b.y + b.h / 2f - 9 * ui, 2.2f * ui, txtCol);
             }
 
+            // current gold, so BUY GOLD is an informed choice
+            string goldLine = MenuGoldLine();
+            if (goldLine != null)
+            {
+                var last = btns[^1];
+                _hud.TextCentered(goldLine, W / 2f, last.y + last.h + 36 * ui, 2f * ui, new Vector4(1f, 0.9f, 0.4f, 1f));
+            }
+
             _hud.TextCentered(TouchUI ? "TAP TO CHOOSE" : "ARROWS + ENTER   OR   MOUSE CLICK        M  MUSIC",
                 W / 2f, H * 0.9f, 1.5f * ui, dim);
             _hud.End();
@@ -1579,13 +1621,13 @@ namespace Dungeon
             {
                 _hud.Quad(0, 0, W, H, new Vector4(0.05f, 0f, 0f, 0.6f));
                 _hud.TextCentered($"{_name} HAS FALLEN", W / 2f, H / 2f - 80 * ui, 5f * ui, new Vector4(0.95f, 0.2f, 0.2f, 1f));
-                _hud.TextCentered($"REACHED DEPTH {_depth}   GOLD {_gold}", W / 2f, H / 2f - 10 * ui, 2.2f * ui, new Vector4(1f, 0.9f, 0.6f, 1f));
+                _hud.TextCentered($"REACHED DEPTH {_depth}   GOLD {Spendable()}", W / 2f, H / 2f - 10 * ui, 2.2f * ui, new Vector4(1f, 0.9f, 0.6f, 1f));
                 int cost = ReviveCost();
                 if (TouchUI)
                     DrawDeathButtons(ui);
                 else
                 {
-                    if (_gold >= cost)
+                    if (Spendable() >= cost)
                         _hud.TextCentered($"PRESS C TO REVIVE  ({cost} GOLD)", W / 2f, H / 2f + 44 * ui, 2.2f * ui, new Vector4(0.5f, 1f, 0.6f, 1f));
                     else
                         _hud.TextCentered($"REVIVE NEEDS {cost} GOLD - NOT ENOUGH", W / 2f, H / 2f + 44 * ui, 1.8f * ui, new Vector4(0.7f, 0.5f, 0.5f, 1f));

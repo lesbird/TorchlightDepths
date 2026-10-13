@@ -63,6 +63,11 @@ namespace Dungeon
                 _game.EnableAppStoreCapture(System.IO.Path.Combine(docs, "appstore"));
             else if (Array.IndexOf(args, "--capture") >= 0)
                 _game.EnableCapture(System.IO.Path.Combine(docs, "capture"));
+            // `--fakestore` / `--fakegc` (and the capture modes) stand in for StoreKit / Game Center,
+            // which have no products or leaderboards to show until they're set up in App Store Connect.
+            bool capturing = Array.IndexOf(args, "--capture") >= 0 || Array.IndexOf(args, "--appstore") >= 0;
+            _game.Store = capturing || Array.IndexOf(args, "--fakestore") >= 0 ? new FakeStore() : new AppStoreKit();
+            _game.Leaderboards = capturing || Array.IndexOf(args, "--fakegc") >= 0 ? new FakeLeaderboards() : new GameCenter(() => this);
             UpdateSizes();
             _game.Load();
 

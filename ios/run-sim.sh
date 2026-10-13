@@ -5,6 +5,9 @@
 #   ios/run-sim.sh "iPad Pro 13-inch (M5)"  any simulator name from `xcrun simctl list devices`
 #   ios/run-sim.sh "iPhone 17" --capture    scripted touch walkthrough; screenshots land in
 #                                           the app's Documents/capture folder (path printed)
+#   ios/run-sim.sh "iPhone 17" --fakestore  gold shop with a stand-in store: the Simulator has
+#                                           no App Store products, so purchases always succeed
+#   ios/run-sim.sh "iPhone 17" --fakegc     leaderboards panel filled with made-up rivals
 #
 # Requires the .NET iOS workload (`dotnet workload install ios`) and Xcode.
 # Note: the Simulator renders OpenGL ES on the CPU, so expect a low frame rate there —

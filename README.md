@@ -131,18 +131,65 @@ continued). The save lives at:
 ~/.config/TorchlightDepths/save.json      # Environment.SpecialFolder.ApplicationData
 ```
 
+## iPhone & iPad
+
+The game also runs on iOS. The `ios/` project builds a native iPhone and iPad app
+from the same `src/` code, played in landscape with touch controls:
+
+| Gesture / button       | Action                                  |
+|------------------------|-----------------------------------------|
+| Swipe **up**           | Step forward (bumps into a monster to attack) |
+| Swipe **down**         | Step back                               |
+| Swipe **left / right** | Turn left / right                       |
+| **MENU** button        | Pause to the menu (auto-saves)          |
+| **MUSIC** button       | Toggle music                            |
+
+The hero's name is typed on an **in-game keyboard** drawn in the game's own style
+(letters, numbers, space, DEL). Tap the name box to bring it up. On the death
+screen, **REVIVE** and **NEW HERO** are buttons. A hardware keyboard on an iPad
+works the same way as on desktop. Leaving the app saves your run and drops you
+to the menu.
+
+Requirements: Xcode and the .NET iOS workload (`dotnet workload install ios`).
+
+```bash
+ios/run-sim.sh                            # build + launch in the iPhone 17 Pro simulator
+ios/run-sim.sh "iPad Pro 13-inch (M5)"    # ...or any other simulator
+ios/run-sim.sh "iPhone 17" --capture      # scripted touch walkthrough with screenshots
+```
+
+The Simulator renders OpenGL ES on the CPU, so it runs at a few frames per second
+there. Real devices draw it on the GPU.
+
+To install on a connected iPhone or iPad (paired, with Developer Mode on):
+
+```bash
+ios/run-device.sh              # first connected device
+ios/run-device.sh iPadAir4     # or match part of the device name
+```
+
+This signs with an Apple Development certificate and a development provisioning
+profile that lists the device (a wildcard `*` team profile works). Set
+`CODESIGN_KEY` / `CODESIGN_PROVISION` to use different ones.
+
+The app icon is rendered by the game itself. `dotnet run -c Release -- --icon icon.bmp`
+draws one square, HUD-free frame (a skeleton in a torchlit corridor). Convert it
+with `sips -s format png -Z 1024 icon.bmp --out ios/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`.
+
 ## Project layout
 
 | File                | Responsibility                                            |
 |---------------------|-----------------------------------------------------------|
-| `src/Program.cs`    | Window + OpenGL 4.1 core context setup                    |
+| `src/Desktop/`      | Desktop host: OpenTK window, OpenGL 4.1 core context, OpenAL backend |
+| `ios/`              | iOS host: GLKView + OpenGL ES 3.0, AVAudioEngine mixer, touch / scene lifecycle |
 | `src/Game.cs`       | Game loop: movement, combat, AI, levels, rendering, HUD   |
+| `src/Touch.cs`      | Touch controls: swipes, on-screen buttons, name keyboard  |
 | `src/Dungeon.cs`    | Procedural room-and-corridor level generation             |
 | `src/Gfx.cs`        | Shader / Mesh / Texture helpers (cube, billboard, quads)  |
 | `src/Textures.cs`   | Procedural stone/floor textures and monster/item sprites  |
 | `src/Font.cs`       | Hand-authored 8×8 bitmap font baked to an atlas           |
 | `src/Hud.cs`        | 2D batched text + quad renderer for the interface         |
-| `src/Audio.cs`      | Procedurally-synthesized sound effects via OpenAL         |
+| `src/Audio.cs`      | Procedurally-synthesized sound effects (playback via `IAudioOut`) |
 | `src/MusicGen.cs`   | Procedural per-level music synthesis                      |
 | `src/Save.cs`       | JSON save/load of the full run state                      |
 
@@ -156,6 +203,12 @@ continued). The save lives at:
 - Grid movement is discrete but **tweened** for smooth turning and stepping.
 - The Retina-correct viewport uses the **framebuffer** pixel size, so rendering
   fills the whole window on HiDPI displays.
+- `Game` owns no window. A host creates the GL context and forwards frames, keys
+  and pointer events, which is what lets one codebase run on desktop and iOS. On
+  iOS the shaders are rewritten to `#version 300 es`, and `ios/GLES.cs` binds the
+  GL calls directly, because OpenTK's GL bindings need a JIT that iOS forbids.
+- Each level's walls, floor and ceiling are baked into three static meshes, so the
+  world draws in a handful of draw calls.
 
 ### Sound
 

@@ -4,9 +4,6 @@ using System.IO;
 using System.Threading.Tasks;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
-using OpenTK.Windowing.Common;
-using OpenTK.Windowing.Desktop;
-using OpenTK.Windowing.GraphicsLibraryFramework;
 
 namespace Dungeon
 {
@@ -30,11 +27,28 @@ namespace Dungeon
         public int Value;
     }
 
-    public sealed class Game : GameWindow
+    /// <summary>
+    /// The whole game: state, rules, and rendering. It owns no window — a platform
+    /// host (desktop GameWindow, iOS GLKView) creates the GL context, sets
+    /// <see cref="FramebufferSize"/>, and forwards frames, keys, and pointer events.
+    /// </summary>
+    public sealed partial class Game
     {
+        // ---- host interface -------------------------------------------------
+        /// <summary>Drawable size in pixels; set by the host before each frame.</summary>
+        public Vector2i FramebufferSize;
+        /// <summary>Unsafe screen edges in pixels (notch, home indicator): left, top, right, bottom.</summary>
+        public Vector4 SafeInsets;
+        /// <summary>Touch-first UI: swipe controls, on-screen buttons and keyboard, no Quit item.</summary>
+        public readonly bool TouchUI;
+        /// <summary>Raised when the game wants the app to exit (menu Quit, capture finished).</summary>
+        public event Action QuitRequested;
+        readonly IAudioOut _audioOut;
+
         // ---- rendering resources -------------------------------------------
         Shader _world, _sprite;
-        Mesh _cube, _floor, _ceil, _bill;
+        Mesh _floor, _bill;                 // single floor tile (exit portal) + sprite quad
+        Mesh _wallsMesh, _floorMesh, _ceilMesh; // whole-level geometry, rebuilt per level
         GlTexture _wallTex, _floorTex, _ceilTex, _exitTex;
         GlTexture _wallNrm, _floorNrm, _ceilNrm, _flatNrm;
         Dictionary<EnemyKind, GlTexture> _enemyTex;
@@ -43,7 +57,7 @@ namespace Dungeon
         Hud _hud;
         Audio _audio;
         Task<short[]> _musicTask; // per-level track generated off the main thread
-        List<(int x, int y)> _visibleWalls = new();
+        readonly List<(int x, int y)> _exits = new();
 
         // ---- game state -----------------------------------------------------
         readonly Random _rng = new(20260729);
@@ -101,15 +115,25 @@ namespace Dungeon
         bool _capture; string _capDir; int _capShot, _capSettle;
         static readonly string[] CapShots = { "menu", "hero", "explore", "depths" };
 
-        public Game(GameWindowSettings gws, NativeWindowSettings nws) : base(gws, nws) { }
+        public Game(IAudioOut audioOut, bool touchUI)
+        {
+            _audioOut = audioOut;
+            TouchUI = touchUI;
+        }
+
+        void Close() => QuitRequested?.Invoke();
 
         /// <summary>Enable auto-capture mode: boot through a fixed set of scenes, save a BMP of each, then quit.</summary>
         public void EnableCapture(string dir) { _capture = true; _capDir = dir; }
 
+        /// <summary>Icon mode: render one staged, HUD-free dungeon frame to a BMP, then quit.</summary>
+        public void EnableIconCapture(string path) { _capture = true; _iconPath = path; _capDir = Path.GetDirectoryName(Path.GetFullPath(path)); }
+        string _iconPath;
+
         // =====================================================================
-        protected override void OnLoad()
+        /// <summary>Create GL resources and audio. Call once with the GL context current.</summary>
+        public void Load()
         {
-            base.OnLoad();
             GL.ClearColor(0.02f, 0.02f, 0.03f, 1f);
             GL.Enable(EnableCap.DepthTest);
             GL.Enable(EnableCap.Blend);
@@ -117,9 +141,7 @@ namespace Dungeon
 
             _world = new Shader(WorldVS, WorldFS);
             _sprite = new Shader(WorldVS, SpriteFS);
-            _cube = Mesh.Cube();
-            _floor = Mesh.FloorTile();
-            _ceil = Mesh.CeilTile();
+            _floor = new Mesh(Mesh.FloorVerts());
             _bill = Mesh.Billboard();
 
             var wall = Textures.StoneWall(_depth);
@@ -158,10 +180,15 @@ namespace Dungeon
 
             _font = new Font();
             _hud = new Hud(_font);
-            _audio = new Audio();
+            _audio = new Audio(_audioOut);
 
             EnterMenu();
-            if (_capture) { Directory.CreateDirectory(_capDir); SetupShot(0); }
+            if (_capture)
+            {
+                Directory.CreateDirectory(_capDir);
+                if (_iconPath != null) SetupIconScene();
+                else if (!TouchUI) SetupShot(0); // touch builds run the scripted walkthrough instead
+            }
         }
 
         // ---- menu / lifecycle ----------------------------------------------
@@ -172,7 +199,7 @@ namespace Dungeon
             _menuItems.Clear();
             if (_menuSave != null) _menuItems.Add(MenuAction.Continue);
             _menuItems.Add(MenuAction.NewGame);
-            _menuItems.Add(MenuAction.Quit);
+            if (!TouchUI) _menuItems.Add(MenuAction.Quit); // mobile apps don't quit themselves
             _menuSel = 0;
             _inMenu = true;
         }
@@ -191,7 +218,7 @@ namespace Dungeon
         void EnterCreate()
         {
             _inMenu = false; _inCreate = true; _dead = false;
-            _createSel = 0;
+            _createSel = 0; _kbOpen = false;
             RollStats();
         }
 
@@ -316,10 +343,7 @@ namespace Dungeon
             foreach (var it in d.Items)
                 _items.Add(new Item { X = it.X, Y = it.Y, Kind = (ItemKind)it.Kind, Value = it.Value });
 
-            _visibleWalls.Clear();
-            for (int x = 0; x < _level.W; x++)
-                for (int y = 0; y < _level.H; y++)
-                    if (_level.IsWall(x, y) && TouchesOpen(x, y)) _visibleWalls.Add((x, y));
+            RebuildGeometry();
 
             _inMenu = false; _dead = false; _intro = 0f;
             StartMusic();
@@ -381,15 +405,29 @@ namespace Dungeon
             _ceilTex = ceil.Albedo; _ceilNrm = ceil.Normal;
         }
 
-        protected override void OnResize(ResizeEventArgs e)
+        // ---- level setup ----------------------------------------------------
+        // Bake the level's walls, floor and ceiling into three static meshes.
+        void RebuildGeometry()
         {
-            base.OnResize(e);
-            // Use the framebuffer size (pixels), not the client size (points) —
-            // on Retina/HiDPI displays they differ by the DPI scale factor.
-            GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
+            var walls = new List<Vector3>();
+            var floors = new List<Vector3>();
+            var ceils = new List<Vector3>();
+            _exits.Clear();
+            for (int x = 0; x < _level.W; x++)
+                for (int y = 0; y < _level.H; y++)
+                {
+                    var t = _level.At(x, y);
+                    if (t == Tile.Wall) { if (TouchesOpen(x, y)) walls.Add(new Vector3(x, 0, y)); continue; }
+                    if (t == Tile.Exit) _exits.Add((x, y)); // drawn separately with the portal texture
+                    else floors.Add(new Vector3(x, 0, y));
+                    if (_level.IsWalkable(x, y)) ceils.Add(new Vector3(x, 1, y));
+                }
+            _wallsMesh?.Dispose(); _floorMesh?.Dispose(); _ceilMesh?.Dispose();
+            _wallsMesh = Mesh.Tiled(Mesh.CubeVerts(), walls);
+            _floorMesh = Mesh.Tiled(Mesh.FloorVerts(), floors);
+            _ceilMesh = Mesh.Tiled(Mesh.CeilVerts(), ceils);
         }
 
-        // ---- level setup ----------------------------------------------------
         bool TouchesOpen(int x, int y)
         {
             for (int dx = -1; dx <= 1; dx++)
@@ -473,10 +511,9 @@ namespace Dungeon
         }
 
         // =====================================================================
-        protected override void OnUpdateFrame(FrameEventArgs args)
+        /// <summary>Advance the simulation by <paramref name="dt"/> seconds.</summary>
+        public void Update(float dt)
         {
-            base.OnUpdateFrame(args);
-            float dt = (float)args.Time;
             _time += dt;
 
             // hand a finished music track to the audio engine (created on this thread)
@@ -505,6 +542,7 @@ namespace Dungeon
                     _animT = 1f; _anim = false;
                     _rcx = _toCx; _rcz = _toCz; _ryaw = _toYaw;
                     if (_pendingDescend) { _pendingDescend = false; Descend(); }
+                    else RunQueuedSwipe();
                 }
                 else
                 {
@@ -525,86 +563,88 @@ namespace Dungeon
         }
 
         // ---- input ----------------------------------------------------------
-        protected override void OnKeyDown(KeyboardKeyEventArgs e)
+        public void KeyDown(Key key)
         {
-            base.OnKeyDown(e);
-            if (e.Key == Keys.F11)
-            {
-                WindowState = WindowState == WindowState.Fullscreen ? WindowState.Normal : WindowState.Fullscreen;
-                return;
-            }
             // M toggles music — but not while naming a hero (so names may contain 'M').
-            if (e.Key == Keys.M && !_inCreate)
+            if (key == Key.M && !_inCreate)
             {
-                bool on = _audio.ToggleMusic();
-                Log(on ? "MUSIC ON" : "MUSIC OFF", new Vector4(0.7f, 0.85f, 1f, 1f));
+                ToggleMusic();
                 return;
             }
 
-            if (_inMenu) { HandleMenuKey(e.Key); return; }
-            if (_inCreate) { HandleCreateKey(e.Key); return; }
+            if (_inMenu) { HandleMenuKey(key); return; }
+            if (_inCreate) { HandleCreateKey(key); return; }
 
-            if (e.Key == Keys.Escape) { EnterMenu(); return; } // pause to menu (auto-saves)
+            if (key == Key.Escape) { EnterMenu(); return; } // pause to menu (auto-saves)
 
             if (_dead)
             {
-                if (e.Key == Keys.C && _gold >= ReviveCost()) Revive();
-                else if (e.Key == Keys.Enter || e.Key == Keys.Space) EnterCreate();
+                if (key == Key.C && _gold >= ReviveCost()) Revive();
+                else if (key == Key.Enter || key == Key.Space) EnterCreate();
                 return;
             }
 
             if (_anim || _pendingDescend) return;
 
-            switch (e.Key)
+            switch (key)
             {
-                case Keys.W: case Keys.Up: Step(_dir, attack: true); break;
-                case Keys.S: case Keys.Down: Step((_dir + 2) % 4, attack: false); break;
-                case Keys.Q: Step((_dir + 3) % 4, attack: false); break;
-                case Keys.E: Step((_dir + 1) % 4, attack: false); break;
-                case Keys.A: case Keys.Left: Turn(-1); break;
-                case Keys.D: case Keys.Right: Turn(+1); break;
-                case Keys.Space: case Keys.Enter: case Keys.F: AttackFront(); break;
+                case Key.W: case Key.Up: Step(_dir, attack: true); break;
+                case Key.S: case Key.Down: Step((_dir + 2) % 4, attack: false); break;
+                case Key.Q: Step((_dir + 3) % 4, attack: false); break;
+                case Key.E: Step((_dir + 1) % 4, attack: false); break;
+                case Key.A: case Key.Left: Turn(-1); break;
+                case Key.D: case Key.Right: Turn(+1); break;
+                case Key.Space: case Key.Enter: case Key.F: AttackFront(); break;
             }
         }
 
-        void HandleMenuKey(Keys k)
+        void ToggleMusic()
+        {
+            bool on = _audio.ToggleMusic();
+            Log(on ? "MUSIC ON" : "MUSIC OFF", new Vector4(0.7f, 0.85f, 1f, 1f));
+        }
+
+        void HandleMenuKey(Key k)
         {
             int n = _menuItems.Count;
             switch (k)
             {
-                case Keys.Up: case Keys.W: _menuSel = (_menuSel - 1 + n) % n; break;
-                case Keys.Down: case Keys.S: _menuSel = (_menuSel + 1) % n; break;
-                case Keys.Enter: case Keys.Space: ActivateMenu(_menuItems[_menuSel]); break;
-                case Keys.Escape: Close(); break;
+                case Key.Up: case Key.W: _menuSel = (_menuSel - 1 + n) % n; break;
+                case Key.Down: case Key.S: _menuSel = (_menuSel + 1) % n; break;
+                case Key.Enter: case Key.Space: ActivateMenu(_menuItems[_menuSel]); break;
+                case Key.Escape: if (!TouchUI) Close(); break;
             }
         }
 
-        void HandleCreateKey(Keys k)
+        void HandleCreateKey(Key k)
         {
             switch (k)
             {
-                case Keys.Up: _createSel = (_createSel + 3) % 4; break;
-                case Keys.Down: _createSel = (_createSel + 1) % 4; break;
-                case Keys.Left: DecAttr(_createSel); break;
-                case Keys.Right: IncAttr(_createSel); break;
-                case Keys.Backspace: if (_name.Length > 0) _name = _name[..^1]; break;
-                case Keys.Enter: BeginRun(); break;
-                case Keys.Tab: RollStats(); break;
-                case Keys.Escape: EnterMenu(); break;
+                case Key.Up: _createSel = (_createSel + 3) % 4; break;
+                case Key.Down: _createSel = (_createSel + 1) % 4; break;
+                case Key.Left: DecAttr(_createSel); break;
+                case Key.Right: IncAttr(_createSel); break;
+                case Key.Backspace: NameBackspace(); break;
+                case Key.Enter: BeginRun(); break;
+                case Key.Tab: RollStats(); break;
+                case Key.Escape: EnterMenu(); break;
             }
         }
 
         // Character-creation text entry (the font is uppercase-only).
-        protected override void OnTextInput(TextInputEventArgs e)
+        public void TextInput(string text)
         {
-            base.OnTextInput(e);
             if (!_inCreate) return;
-            foreach (char c in e.AsString)
-            {
-                if (_name.Length >= 14) break;
-                if (char.IsLetterOrDigit(c) || c == ' ') _name += char.ToUpperInvariant(c);
-            }
+            foreach (char c in text) NameAppend(c);
         }
+
+        const int NameMax = 14;
+        void NameAppend(char c)
+        {
+            if (_name.Length >= NameMax) return;
+            if (char.IsAsciiLetterOrDigit(c) || c == ' ') _name += char.ToUpperInvariant(c);
+        }
+        void NameBackspace() { if (_name.Length > 0) _name = _name[..^1]; }
 
         void ActivateCreate(CreateAction a)
         {
@@ -616,11 +656,11 @@ namespace Dungeon
             }
         }
 
-        protected override void OnMouseDown(MouseButtonEventArgs e)
+        // A primary press (left click / touch down), in framebuffer pixels.
+        public void PointerDown(float mx, float my)
         {
-            base.OnMouseDown(e);
-            if (e.Button != MouseButton.Left) return;
-            var (mx, my) = MouseFb();
+            _ptrX = mx; _ptrY = my; _ptrHeld = true;
+            if (TouchUI && TouchPointerDown(mx, my)) return;
 
             if (_inMenu)
             {
@@ -634,8 +674,11 @@ namespace Dungeon
             }
             else if (_inCreate)
             {
+                // fingers need more room than the drawn steppers: pad the hit box into the gaps
+                float ui = FramebufferSize.Y / 720f;
+                float px = TouchUI ? 14 * ui : 0, py = TouchUI ? 7 * ui : 0;
                 foreach (var b in AttrButtons())
-                    if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h)
+                    if (Inside(mx, my, b.x - px, b.y - py, b.w + 2 * px, b.h + 2 * py))
                     {
                         _createSel = b.attr;
                         if (b.delta > 0) IncAttr(b.attr); else DecAttr(b.attr);
@@ -647,12 +690,26 @@ namespace Dungeon
             }
         }
 
-        (float x, float y) MouseFb()
+        public void PointerMove(float mx, float my)
         {
-            float sx = ClientSize.X > 0 ? FramebufferSize.X / (float)ClientSize.X : 1f;
-            float sy = ClientSize.Y > 0 ? FramebufferSize.Y / (float)ClientSize.Y : 1f;
-            return (MousePosition.X * sx, MousePosition.Y * sy);
+            _ptrX = mx; _ptrY = my;
+            if (TouchUI && _ptrHeld) TouchPointerMove(mx, my);
         }
+
+        public void PointerUp(float mx, float my)
+        {
+            _ptrHeld = false;
+            if (TouchUI)
+            {
+                TouchPointerUp(mx, my);
+                _ptrX = _ptrY = -1e6f; // a lifted finger hovers nothing
+            }
+        }
+
+        // Last known pointer position (framebuffer pixels) for hover highlights.
+        float _ptrX = -1e6f, _ptrY = -1e6f;
+        bool _ptrHeld;
+        (float x, float y) MouseFb() => (_ptrX, _ptrY);
 
         List<(MenuAction action, string label, float x, float y, float w, float h)> MenuButtons()
         {
@@ -1004,10 +1061,7 @@ namespace Dungeon
             _px = _level.Start.x; _py = _level.Start.y; _dir = 0;
             _rcx = _px + 0.5f; _rcz = _py + 0.5f; _ryaw = _targetYaw = 0f;
             _anim = false; _pendingDescend = false;
-            _visibleWalls.Clear();
-            for (int x = 0; x < _level.W; x++)
-                for (int y = 0; y < _level.H; y++)
-                    if (_level.IsWall(x, y) && TouchesOpen(x, y)) _visibleWalls.Add((x, y));
+            RebuildGeometry();
             SpawnEntities();
             MarkSeen();
             StartMusic();
@@ -1015,9 +1069,9 @@ namespace Dungeon
         }
 
         // =====================================================================
-        protected override void OnRenderFrame(FrameEventArgs args)
+        /// <summary>Draw one frame into the currently bound framebuffer. The host presents it.</summary>
+        public void Render()
         {
-            base.OnRenderFrame(args);
             GL.Viewport(0, 0, FramebufferSize.X, FramebufferSize.Y);
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
@@ -1035,18 +1089,40 @@ namespace Dungeon
                 RenderSprites(view, proj, eye, torch);
             }
 
+            if (_iconPath != null) { IconTick(); return; } // the world only, no HUD
+
             if (_inMenu) RenderMenu();
             else if (_inCreate) RenderCreate();
             else RenderHud();
 
             if (_capture) CaptureTick();
+        }
 
-            SwapBuffers();
+        // ---- app icon -------------------------------------------------------
+        // A skeleton looming in a torchlit corridor, rendered by the game itself.
+        void SetupIconScene()
+        {
+            SetupCaptureDungeon(5, true);
+            _log.Clear();
+            _enemies.Clear(); _items.Clear();
+            int ex = _px + DX[_dir], ey = _py + DY[_dir];
+            _enemies.Add(new Enemy { X = ex, Y = ey, Rx = ex, Ry = ey, Kind = EnemyKind.Skeleton, Name = "SKELETON", Hp = 1, MaxHp = 1 });
+            // pull the camera back a little so the skeleton fills the frame without clipping
+            _rcx -= DX[_dir] * 0.35f; _rcz -= DY[_dir] * 0.35f;
+        }
+
+        void IconTick()
+        {
+            if (++_capSettle < 6) return;
+            SaveScreenshot(_iconPath);
+            _iconPath = null; _capture = false;
+            Close();
         }
 
         // ---- capture driver -------------------------------------------------
         void CaptureTick()
         {
+            if (TouchUI) { TouchCaptureTick(); return; }
             if (++_capSettle < 6) return; // let a few frames settle before grabbing
             _capSettle = 0;
             string path = Path.Combine(_capDir, $"{_capShot}-{CapShots[_capShot]}.bmp");
@@ -1097,10 +1173,7 @@ namespace Dungeon
             _rcx = _px + 0.5f; _rcz = _py + 0.5f; _ryaw = _targetYaw = _dir * MathF.PI / 2f;
             _anim = false; _pendingDescend = false;
 
-            _visibleWalls.Clear();
-            for (int x = 0; x < _level.W; x++)
-                for (int y = 0; y < _level.H; y++)
-                    if (_level.IsWall(x, y) && TouchesOpen(x, y)) _visibleWalls.Add((x, y));
+            RebuildGeometry();
 
             // stage a couple of foes and some loot down the corridor
             _enemies.Clear(); _items.Clear();
@@ -1183,44 +1256,26 @@ namespace Dungeon
             _world.Set("uNormal", 1);
             _world.Set("uBump", 1f);
 
-            // walls
+            // walls, floor, ceiling: pre-baked in world space (see RebuildGeometry)
+            _world.Set("uModel", Matrix4.Identity);
             _wallTex.Bind(TextureUnit.Texture0);
             _wallNrm.Bind(TextureUnit.Texture1);
-            foreach (var (x, y) in _visibleWalls)
-            {
-                _world.Set("uModel", Matrix4.CreateTranslation(x, 0, y));
-                _cube.Draw();
-            }
-
-            // floor (+ exit tile), ceiling
+            _wallsMesh.Draw();
+            _floorTex.Bind(TextureUnit.Texture0);
             _floorNrm.Bind(TextureUnit.Texture1);
-            for (int x = 0; x < _level.W; x++)
-                for (int y = 0; y < _level.H; y++)
-                {
-                    var t = _level.At(x, y);
-                    if (t == Tile.Wall) continue;
-                    if (t == Tile.Exit)
-                    {
-                        _exitTex.Bind(TextureUnit.Texture0);
-                        _flatNrm.Bind(TextureUnit.Texture1);   // portal glows flat
-                    }
-                    else
-                    {
-                        _floorTex.Bind(TextureUnit.Texture0);
-                        _floorNrm.Bind(TextureUnit.Texture1);
-                    }
-                    _world.Set("uModel", Matrix4.CreateTranslation(x, 0, y));
-                    _floor.Draw();
-                }
+            _floorMesh.Draw();
             _ceilTex.Bind(TextureUnit.Texture0);
             _ceilNrm.Bind(TextureUnit.Texture1);
-            for (int x = 0; x < _level.W; x++)
-                for (int y = 0; y < _level.H; y++)
-                {
-                    if (!_level.IsWalkable(x, y)) continue;
-                    _world.Set("uModel", Matrix4.CreateTranslation(x, 1, y));
-                    _ceil.Draw();
-                }
+            _ceilMesh.Draw();
+
+            // exit portal tile(s)
+            _exitTex.Bind(TextureUnit.Texture0);
+            _flatNrm.Bind(TextureUnit.Texture1);   // portal glows flat
+            foreach (var (x, y) in _exits)
+            {
+                _world.Set("uModel", Matrix4.CreateTranslation(x, 0, y));
+                _floor.Draw();
+            }
         }
 
         void RenderSprites(Matrix4 view, Matrix4 proj, Vector3 eye, float torch)
@@ -1306,7 +1361,8 @@ namespace Dungeon
                 _hud.TextCentered(b.label, b.x + b.w / 2f, b.y + b.h / 2f - 9 * ui, 2.2f * ui, txtCol);
             }
 
-            _hud.TextCentered("ARROWS + ENTER   OR   MOUSE CLICK        M  MUSIC", W / 2f, H * 0.9f, 1.5f * ui, dim);
+            _hud.TextCentered(TouchUI ? "TAP TO CHOOSE" : "ARROWS + ENTER   OR   MOUSE CLICK        M  MUSIC",
+                W / 2f, H * 0.9f, 1.5f * ui, dim);
             _hud.End();
         }
 
@@ -1327,14 +1383,17 @@ namespace Dungeon
             _hud.TextCentered("CREATE YOUR HERO", W / 2f, H * 0.09f, 4f * ui, gold);
 
             // ---- name field
-            float boxW = 560 * ui, boxH = 58 * ui, boxX = W / 2f - boxW / 2f, boxY = H * 0.2f;
+            var (boxX, boxY, boxW, boxH) = NameBox();
             _hud.TextCentered("NAME", W / 2f, boxY - 30 * ui, 1.6f * ui, dim);
             _hud.Quad(boxX, boxY, boxW, boxH, new Vector4(0.1f, 0.1f, 0.14f, 0.95f));
             Border(boxX, boxY, boxW, boxH, 3 * ui, gold);
             float nScale = 2.6f * ui;
             float nx = boxX + 18 * ui, ny = boxY + (boxH - 8 * nScale) / 2f;
+            if (TouchUI && _name.Length == 0 && !_kbOpen)
+                _hud.TextCentered("TAP TO ENTER NAME", W / 2f, ny + nScale, nScale * 0.75f, dim);
             _hud.Text(_name, nx, ny, nScale, white);
-            if (((int)(_time * 2)) % 2 == 0) // blinking caret
+            bool caret = !TouchUI || _kbOpen; // on touch, the caret means the keyboard is up
+            if (caret && ((int)(_time * 2)) % 2 == 0) // blinking caret
                 _hud.Quad(nx + _hud.TextWidth(_name, nScale) + 2 * ui, boxY + boxH * 0.22f, 3 * ui, boxH * 0.56f, white);
 
             // ---- point-buy attributes + live derived preview
@@ -1379,9 +1438,29 @@ namespace Dungeon
                     hover ? new Vector4(1f, 0.96f, 0.86f, 1f) : white);
             }
 
-            _hud.TextCentered("TYPE NAME   ARROWS ADJUST   TAB REROLL   ENTER BEGIN   ESC BACK", W / 2f, H * 0.9f, 1.35f * ui, dim);
+            if (TouchUI)
+            {
+                _hud.TextCentered("TAP + / - TO SPEND POINTS", W / 2f, H * 0.9f, 1.35f * ui, dim);
+                if (_kbOpen) DrawTouchKeyboard(W, H, ui);
+            }
+            else
+                _hud.TextCentered("TYPE NAME   ARROWS ADJUST   TAB REROLL   ENTER BEGIN   ESC BACK", W / 2f, H * 0.9f, 1.35f * ui, dim);
             _hud.End();
         }
+
+        // Themed push-button (menu style): amber when hot, slate otherwise.
+        void DrawButton(float x, float y, float w, float h, string label, bool hot, float ui, float textScale = 2f)
+        {
+            var gold = new Vector4(1f, 0.82f, 0.45f, 1f);
+            var fill = hot ? new Vector4(0.48f, 0.30f, 0.11f, 0.95f) : new Vector4(0.12f, 0.12f, 0.16f, 0.9f);
+            _hud.Quad(x, y, w, h, fill);
+            Border(x, y, w, h, 3 * ui, hot ? gold : new Vector4(0.35f, 0.35f, 0.42f, 1f));
+            _hud.TextCentered(label, x + w / 2f, y + h / 2f - 4 * textScale, textScale,
+                hot ? new Vector4(1f, 0.96f, 0.86f, 1f) : new Vector4(0.96f, 0.96f, 1f, 1f));
+        }
+
+        static bool Inside(float px, float py, float x, float y, float w, float h)
+            => px >= x && px <= x + w && py >= y && py <= y + h;
 
         void Border(float x, float y, float w, float h, float t, Vector4 c)
         {
@@ -1415,12 +1494,15 @@ namespace Dungeon
             if (_descendFlash > 0)
                 _hud.Quad(0, 0, W, H, new Vector4(1f, 0.85f, 0.4f, _descendFlash * 0.4f));
 
+            // keep HUD clear of notches / the home indicator
+            float sl = SafeInsets.X, st = SafeInsets.Y, sb = SafeInsets.W;
+
             // ---- hero banner (top-left)
-            _hud.Text($"{_name} THE {_className}", 24 * ui, 18 * ui, 2f * ui, new Vector4(1f, 0.82f, 0.45f, 1f));
-            _hud.Text($"DODGE {_dodgePct}%  CRIT {_critPct}%", 24 * ui, 46 * ui, 1.4f * ui, new Vector4(0.7f, 0.72f, 0.8f, 1f));
+            _hud.Text($"{_name} THE {_className}", 24 * ui + sl, 18 * ui + st, 2f * ui, new Vector4(1f, 0.82f, 0.45f, 1f));
+            _hud.Text($"DODGE {_dodgePct}%  CRIT {_critPct}%", 24 * ui + sl, 46 * ui + st, 1.4f * ui, new Vector4(0.7f, 0.72f, 0.8f, 1f));
 
             // ---- bottom panel: HP bar + stats
-            float barW = 320 * ui, barH = 26 * ui, barX = 24 * ui, barY = H - 54 * ui;
+            float barW = 320 * ui, barH = 26 * ui, barX = 24 * ui + sl, barY = H - 54 * ui - sb;
             _hud.Quad(barX - 3 * ui, barY - 3 * ui, barW + 6 * ui, barH + 6 * ui, new Vector4(0f, 0f, 0f, 0.6f));
             _hud.Quad(barX, barY, barW, barH, new Vector4(0.25f, 0.05f, 0.06f, 0.9f));
             float frac = _maxHp > 0 ? Math.Clamp(_hp / (float)_maxHp, 0f, 1f) : 0f;
@@ -1444,7 +1526,7 @@ namespace Dungeon
             if (_freeze > 0) buffs += $"FREEZE {_freeze}   ";
             if (_haste > 0) buffs += $"HASTE {_haste}   ";
             if (buffs.Length > 0)
-                _hud.Text(buffs, 24 * ui, 72 * ui, 1.4f * ui, new Vector4(0.7f, 0.85f, 1f, 1f));
+                _hud.Text(buffs, 24 * ui + sl, 72 * ui + st, 1.4f * ui, new Vector4(0.7f, 0.85f, 1f, 1f));
 
             // ---- message log (above the bar)
             float ly = barY - 70 * ui;
@@ -1459,6 +1541,7 @@ namespace Dungeon
 
             DrawMinimap(W, H, ui);
             DrawCrosshair(W, H, ui);
+            if (TouchUI && !_dead) DrawHudButtons(ui);
 
             // ---- entering-a-new-depth banner (big, centered, fades out)
             if (_levelBanner > 0 && !_dead)
@@ -1476,13 +1559,20 @@ namespace Dungeon
             if (_intro > 0)
             {
                 float a = Math.Clamp(_intro, 0f, 1f);
-                _hud.TextCentered("WASD MOVE   A/D TURN   Q/E STRAFE   SPACE ATTACK   M MUSIC   F11 WINDOW",
-                    W / 2f, 40 * ui, 1.7f * ui, new Vector4(1f, 1f, 1f, a * 0.9f));
+                var hint = new Vector4(1f, 1f, 1f, a * 0.9f);
+                if (TouchUI)
+                {
+                    _hud.TextCentered("SWIPE UP  MOVE / ATTACK     SWIPE DOWN  BACK", W / 2f, H * 0.22f, 1.7f * ui, hint);
+                    _hud.TextCentered("SWIPE LEFT / RIGHT  TURN", W / 2f, H * 0.22f + 28 * ui, 1.7f * ui, hint);
+                }
+                else
+                    _hud.TextCentered("WASD MOVE   A/D TURN   Q/E STRAFE   SPACE ATTACK   M MUSIC   F11 WINDOW",
+                        W / 2f, 40 * ui, 1.7f * ui, hint);
             }
 
             // ---- music-off indicator
             if (!_audio.MusicOn)
-                _hud.Text("MUSIC OFF", 24 * ui, H - 84 * ui, 1.4f * ui, new Vector4(0.6f, 0.62f, 0.7f, 0.9f));
+                _hud.Text("MUSIC OFF", 24 * ui + sl, H - 84 * ui - sb, 1.4f * ui, new Vector4(0.6f, 0.62f, 0.7f, 0.9f));
 
             // ---- death screen
             if (_dead)
@@ -1491,11 +1581,16 @@ namespace Dungeon
                 _hud.TextCentered($"{_name} HAS FALLEN", W / 2f, H / 2f - 80 * ui, 5f * ui, new Vector4(0.95f, 0.2f, 0.2f, 1f));
                 _hud.TextCentered($"REACHED DEPTH {_depth}   GOLD {_gold}", W / 2f, H / 2f - 10 * ui, 2.2f * ui, new Vector4(1f, 0.9f, 0.6f, 1f));
                 int cost = ReviveCost();
-                if (_gold >= cost)
-                    _hud.TextCentered($"PRESS C TO REVIVE  ({cost} GOLD)", W / 2f, H / 2f + 44 * ui, 2.2f * ui, new Vector4(0.5f, 1f, 0.6f, 1f));
+                if (TouchUI)
+                    DrawDeathButtons(ui);
                 else
-                    _hud.TextCentered($"REVIVE NEEDS {cost} GOLD - NOT ENOUGH", W / 2f, H / 2f + 44 * ui, 1.8f * ui, new Vector4(0.7f, 0.5f, 0.5f, 1f));
-                _hud.TextCentered("PRESS ENTER TO ROLL A NEW HERO", W / 2f, H / 2f + 88 * ui, 1.9f * ui, new Vector4(0.85f, 0.85f, 0.9f, 1f));
+                {
+                    if (_gold >= cost)
+                        _hud.TextCentered($"PRESS C TO REVIVE  ({cost} GOLD)", W / 2f, H / 2f + 44 * ui, 2.2f * ui, new Vector4(0.5f, 1f, 0.6f, 1f));
+                    else
+                        _hud.TextCentered($"REVIVE NEEDS {cost} GOLD - NOT ENOUGH", W / 2f, H / 2f + 44 * ui, 1.8f * ui, new Vector4(0.7f, 0.5f, 0.5f, 1f));
+                    _hud.TextCentered("PRESS ENTER TO ROLL A NEW HERO", W / 2f, H / 2f + 88 * ui, 1.9f * ui, new Vector4(0.85f, 0.85f, 0.9f, 1f));
+                }
             }
 
             _hud.End();
@@ -1504,7 +1599,7 @@ namespace Dungeon
         void DrawMinimap(int W, int H, float ui)
         {
             float cell = 5f * ui, mw = _level.W * cell, mh = _level.H * cell;
-            float ox = W - mw - 18 * ui, oy = 18 * ui;
+            float ox = W - mw - 18 * ui - SafeInsets.Z, oy = 18 * ui + SafeInsets.Y;
             _hud.Quad(ox - 4 * ui, oy - 4 * ui, mw + 8 * ui, mh + 8 * ui, new Vector4(0f, 0f, 0f, 0.55f));
             for (int x = 0; x < _level.W; x++)
                 for (int y = 0; y < _level.H; y++)
@@ -1572,15 +1667,22 @@ namespace Dungeon
             return v;
         }
 
-        protected override void OnUnload()
+        /// <summary>The app is going to the background: drop to the menu, which saves the run.</summary>
+        public void Suspend()
+        {
+            if (!_inMenu && !_inCreate && !_dead && _level != null) EnterMenu();
+            else SaveGame();
+        }
+
+        public void Unload()
         {
             SaveGame(); // persist the run if the window is closed mid-game
             _world?.Dispose(); _sprite?.Dispose();
-            _cube?.Dispose(); _floor?.Dispose(); _ceil?.Dispose(); _bill?.Dispose();
+            _floor?.Dispose(); _bill?.Dispose();
+            _wallsMesh?.Dispose(); _floorMesh?.Dispose(); _ceilMesh?.Dispose();
             _wallTex?.Dispose(); _floorTex?.Dispose(); _ceilTex?.Dispose(); _exitTex?.Dispose();
             _wallNrm?.Dispose(); _floorNrm?.Dispose(); _ceilNrm?.Dispose(); _flatNrm?.Dispose();
             _audio?.Dispose();
-            base.OnUnload();
         }
 
         // =====================================================================

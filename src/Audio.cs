@@ -1,48 +1,52 @@
 using System;
 using System.Collections.Generic;
-using OpenTK.Audio.OpenAL;
 
 namespace Dungeon
 {
     public enum Sound { Step, Bump, Swing, Hit, Kill, Hurt, Gold, Potion, Power, Descend, Death }
 
     /// <summary>
-    /// Procedurally-synthesized sound effects played through OpenAL. Every effect
-    /// is generated as a PCM waveform in code — no audio files. Fails soft: if no
-    /// audio device is available the whole engine becomes a no-op.
+    /// Playback backend for <see cref="Audio"/>: one-shot clips (gain + pitch) plus
+    /// looping channels for ambience and music. All PCM is mono 16-bit at 44.1 kHz.
+    /// Implementations fail soft — <see cref="Init"/> returns false if there's no device.
+    /// </summary>
+    public interface IAudioOut : IDisposable
+    {
+        bool Init();
+        int AddClip(short[] pcm);
+        void PlayClip(int clip, float gain, float pitch);
+        /// <summary>Replace a loop channel's track (null clears it).</summary>
+        void SetLoop(LoopChannel ch, short[] pcm, float gain, bool playing);
+        void SetLoopPlaying(LoopChannel ch, bool playing);
+    }
+
+    public enum LoopChannel { Ambient, Music }
+
+    /// <summary>
+    /// Procedurally-synthesized sound effects and music. Every effect is generated
+    /// as a PCM waveform in code — no audio files — and handed to an
+    /// <see cref="IAudioOut"/> backend. Fails soft: with no audio device the whole
+    /// engine becomes a no-op.
     /// </summary>
     public sealed class Audio : IDisposable
     {
-        const int SR = 44100;
+        public const int SR = 44100;
+        readonly IAudioOut _out;
         bool _ok;
-        ALDevice _device;
-        ALContext _context;
-        readonly Dictionary<Sound, int> _buffers = new();
-        int[] _sources;
-        int _next;
-        int _ambientSource = -1;
-        int _musicSource = -1;
-        int _musicBuffer = -1;
+        readonly Dictionary<Sound, int> _clips = new();
         bool _musicOn = true;
         readonly Random _rng = new(777);
 
         public bool MusicOn => _musicOn;
 
-        public Audio()
+        public Audio(IAudioOut output)
         {
+            _out = output;
             try
             {
-                _device = ALC.OpenDevice(null);
-                if (_device == ALDevice.Null) return;
-                _context = ALC.CreateContext(_device, (int[])null);
-                if (_context == ALContext.Null) return;
-                ALC.MakeContextCurrent(_context);
-
-                _sources = new int[24];
-                for (int i = 0; i < _sources.Length; i++) _sources[i] = AL.GenSource();
-
+                if (_out == null || !_out.Init()) return;
                 Build();
-                StartAmbient();
+                _out.SetLoop(LoopChannel.Ambient, Ambient(), 0.35f, true);
                 _ok = true;
             }
             catch
@@ -53,42 +57,24 @@ namespace Dungeon
 
         void Build()
         {
-            _buffers[Sound.Step] = Buf(Step());
-            _buffers[Sound.Bump] = Buf(Bump());
-            _buffers[Sound.Swing] = Buf(Swing());
-            _buffers[Sound.Hit] = Buf(Hit());
-            _buffers[Sound.Kill] = Buf(Kill());
-            _buffers[Sound.Hurt] = Buf(Hurt());
-            _buffers[Sound.Gold] = Buf(Gold());
-            _buffers[Sound.Potion] = Buf(Potion());
-            _buffers[Sound.Power] = Buf(Power());
-            _buffers[Sound.Descend] = Buf(Descend());
-            _buffers[Sound.Death] = Buf(Death());
-        }
-
-        int Buf(short[] pcm)
-        {
-            int b = AL.GenBuffer();
-            AL.BufferData(b, ALFormat.Mono16, pcm, SR);
-            return b;
+            _clips[Sound.Step] = _out.AddClip(Step());
+            _clips[Sound.Bump] = _out.AddClip(Bump());
+            _clips[Sound.Swing] = _out.AddClip(Swing());
+            _clips[Sound.Hit] = _out.AddClip(Hit());
+            _clips[Sound.Kill] = _out.AddClip(Kill());
+            _clips[Sound.Hurt] = _out.AddClip(Hurt());
+            _clips[Sound.Gold] = _out.AddClip(Gold());
+            _clips[Sound.Potion] = _out.AddClip(Potion());
+            _clips[Sound.Power] = _out.AddClip(Power());
+            _clips[Sound.Descend] = _out.AddClip(Descend());
+            _clips[Sound.Death] = _out.AddClip(Death());
         }
 
         public void Play(Sound s, float gain = 1f, float pitchJitter = 0f)
         {
-            if (!_ok || !_buffers.TryGetValue(s, out int buf)) return;
-            int src = -1;
-            for (int i = 0; i < _sources.Length; i++)
-            {
-                AL.GetSource(_sources[i], ALGetSourcei.SourceState, out int st);
-                if ((ALSourceState)st != ALSourceState.Playing) { src = _sources[i]; break; }
-            }
-            if (src == -1) { src = _sources[_next]; _next = (_next + 1) % _sources.Length; }
-
+            if (!_ok || !_clips.TryGetValue(s, out int clip)) return;
             float pitch = 1f + ((float)_rng.NextDouble() * 2f - 1f) * pitchJitter;
-            AL.Source(src, ALSourcei.Buffer, buf);
-            AL.Source(src, ALSourcef.Gain, gain);
-            AL.Source(src, ALSourcef.Pitch, pitch <= 0 ? 1f : pitch);
-            AL.SourcePlay(src);
+            try { _out.PlayClip(clip, gain, pitch <= 0 ? 1f : pitch); } catch { }
         }
 
         // ---- procedural music track (looping, swapped per level) ------------
@@ -97,20 +83,7 @@ namespace Dungeon
         public void SetMusic(short[] pcm)
         {
             if (!_ok || pcm == null || pcm.Length == 0) return;
-            try
-            {
-                if (_musicSource == -1) _musicSource = AL.GenSource();
-                AL.SourceStop(_musicSource);
-                AL.Source(_musicSource, ALSourcei.Buffer, 0);
-                if (_musicBuffer != -1) AL.DeleteBuffer(_musicBuffer);
-
-                _musicBuffer = AL.GenBuffer();
-                AL.BufferData(_musicBuffer, ALFormat.Mono16, pcm, SR);
-                AL.Source(_musicSource, ALSourcei.Buffer, _musicBuffer);
-                AL.Source(_musicSource, ALSourceb.Looping, true);
-                AL.Source(_musicSource, ALSourcef.Gain, 0.5f);
-                if (_musicOn) AL.SourcePlay(_musicSource);
-            }
+            try { _out.SetLoop(LoopChannel.Music, pcm, 0.5f, _musicOn); }
             catch { /* music is non-essential */ }
         }
 
@@ -118,26 +91,11 @@ namespace Dungeon
         public bool ToggleMusic()
         {
             _musicOn = !_musicOn;
-            if (_ok && _musicSource != -1)
+            if (_ok)
             {
-                try
-                {
-                    if (_musicOn) AL.SourcePlay(_musicSource);
-                    else AL.SourcePause(_musicSource);
-                }
-                catch { }
+                try { _out.SetLoopPlaying(LoopChannel.Music, _musicOn); } catch { }
             }
             return _musicOn;
-        }
-
-        void StartAmbient()
-        {
-            int b = Buf(Ambient());
-            _ambientSource = AL.GenSource();
-            AL.Source(_ambientSource, ALSourcei.Buffer, b);
-            AL.Source(_ambientSource, ALSourceb.Looping, true);
-            AL.Source(_ambientSource, ALSourcef.Gain, 0.35f);
-            AL.SourcePlay(_ambientSource);
         }
 
         // =====================================================================
@@ -375,16 +333,7 @@ namespace Dungeon
 
         public void Dispose()
         {
-            if (!_ok) return;
-            try
-            {
-                if (_musicSource != -1) AL.SourceStop(_musicSource);
-                if (_musicBuffer != -1) AL.DeleteBuffer(_musicBuffer);
-                ALC.MakeContextCurrent(ALContext.Null);
-                ALC.DestroyContext(_context);
-                ALC.CloseDevice(_device);
-            }
-            catch { }
+            try { _out?.Dispose(); } catch { }
         }
     }
 }

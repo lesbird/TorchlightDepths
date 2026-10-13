@@ -9,6 +9,12 @@ namespace Dungeon
     {
         public readonly int Handle;
 
+        /// <summary>
+        /// GLSL version line swapped in for the sources' "#version 330 core". Hosts on
+        /// OpenGL ES (iOS) set this to "#version 300 es" plus default precisions.
+        /// </summary>
+        public static string GlslHeader = "#version 330 core";
+
         public Shader(string vertexSrc, string fragmentSrc)
         {
             int vs = Compile(ShaderType.VertexShader, vertexSrc);
@@ -29,7 +35,7 @@ namespace Dungeon
         static int Compile(ShaderType type, string src)
         {
             int id = GL.CreateShader(type);
-            GL.ShaderSource(id, src);
+            GL.ShaderSource(id, src.Replace("#version 330 core", GlslHeader));
             GL.CompileShader(id);
             GL.GetShader(id, ShaderParameter.CompileStatus, out int ok);
             if (ok == 0)
@@ -38,7 +44,13 @@ namespace Dungeon
         }
 
         public void Use() => GL.UseProgram(Handle);
-        int Loc(string name) => GL.GetUniformLocation(Handle, name);
+        // Cached: the world pass sets uModel once per tile, thousands of times a frame.
+        readonly System.Collections.Generic.Dictionary<string, int> _locs = new();
+        int Loc(string name)
+        {
+            if (!_locs.TryGetValue(name, out int loc)) _locs[name] = loc = GL.GetUniformLocation(Handle, name);
+            return loc;
+        }
 
         public void Set(string n, int v) => GL.Uniform1(Loc(n), v);
         public void Set(string n, float v) => GL.Uniform1(Loc(n), v);
@@ -87,8 +99,25 @@ namespace Dungeon
 
         // ---- factory helpers -------------------------------------------------
 
+        /// <summary>
+        /// Bake many copies of one tile's vertices, each translated by an offset, into a
+        /// single static mesh — one draw call for a whole level's walls/floor/ceiling.
+        /// </summary>
+        public static Mesh Tiled(float[] tile, System.Collections.Generic.IReadOnlyList<Vector3> offsets)
+        {
+            var v = new float[tile.Length * offsets.Count];
+            int o = 0;
+            foreach (var off in offsets)
+                for (int i = 0; i < tile.Length; i += 8, o += 8)
+                {
+                    v[o] = tile[i] + off.X; v[o + 1] = tile[i + 1] + off.Y; v[o + 2] = tile[i + 2] + off.Z;
+                    for (int k = 3; k < 8; k++) v[o + k] = tile[i + k];
+                }
+            return new Mesh(v);
+        }
+
         /// <summary>Unit cube spanning [0,1]^3, outward normals, per-face UV 0..1.</summary>
-        public static Mesh Cube()
+        public static float[] CubeVerts()
         {
             // face = 4 corners (ccw) + normal + per-corner uv
             void Quad(System.Collections.Generic.List<float> l, Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector3 n)
@@ -108,11 +137,11 @@ namespace Dungeon
             Quad(l, p000, p001, p011, p010, new(-1, 0, 0));  // -X
             Quad(l, p010, p011, p111, p110, new(0, 1, 0));   // +Y
             Quad(l, p001, p000, p100, p101, new(0, -1, 0));  // -Y
-            return new Mesh(l.ToArray());
+            return l.ToArray();
         }
 
         /// <summary>1x1 floor tile in XZ plane at y=0, normal +Y.</summary>
-        public static Mesh FloorTile()
+        public static float[] FloorVerts()
         {
             float[] v =
             {
@@ -123,11 +152,11 @@ namespace Dungeon
                 1,0,1, 0,1,0, 1,1,
                 0,0,1, 0,1,0, 0,1,
             };
-            return new Mesh(v);
+            return v;
         }
 
         /// <summary>1x1 ceiling tile in XZ plane at y=0 (translate to y=1), normal -Y.</summary>
-        public static Mesh CeilTile()
+        public static float[] CeilVerts()
         {
             float[] v =
             {
@@ -138,7 +167,7 @@ namespace Dungeon
                 0,0,1, 0,-1,0, 0,1,
                 1,0,1, 0,-1,0, 1,1,
             };
-            return new Mesh(v);
+            return v;
         }
 
         /// <summary>Upright billboard quad, x in [-0.45,0.45], y in [0.02,0.92], z=0, normal +Z.</summary>

@@ -15,6 +15,12 @@
     <PackageReference Include="OpenTK" Version="4.8.2" />
   </ItemGroup>
 
+  <!-- The iOS app lives in ios/ and builds from its own project (it shares src/ minus src/Desktop). -->
+  <ItemGroup>
+    <Compile Remove="ios/**" />
+    <None Remove="ios/**" />
+  </ItemGroup>
+
   <!-- Bundle OpenAL-Soft on Windows so sound works without a system OpenAL.
        OpenTK's OpenAL loader looks for openal32.dll then soft_oal.dll in the app dir.
        Classified as a native .dll, it embeds into the single-file exe and extracts at runtime. -->

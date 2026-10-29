@@ -280,6 +280,22 @@ Each upload needs a higher build number. The marketing version is
 (`ios/PrivacyInfo.xcprivacy`) and the export-compliance flag in `Info.plist` are
 already set up. The store copy and screenshots are in `appstore/`.
 
+### Publishing to the Mac App Store
+
+`macos/build-appstore.sh` does the same for the desktop build. It makes a sandboxed,
+Apple Silicon (arm64) `.app` from a single-file `dotnet publish`, and Xcode re-signs it
+and exports the signed installer:
+
+```bash
+macos/build-appstore.sh 1             # build 1 -> macos/bin/AppStore/export/Torchlight Depths.pkg
+macos/build-appstore.sh 2 --upload    # build 2, signed and uploaded to App Store Connect
+```
+
+It uses the same bundle ID. To list the Mac version, add the **macOS** platform to the existing app
+record (*App Information → + Add Platform*) rather than making a new app. The marketing
+version is `VERSION` (default `1.0.0`). Sandbox entitlements are in `macos/Entitlements.plist`.
+The Mac build has no shop or Game Center. The Mac screenshots and app preview are in `appstore/`.
+
 ## Project layout
 
 | File                | Responsibility                                            |

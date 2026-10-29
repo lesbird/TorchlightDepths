@@ -147,7 +147,7 @@ namespace Dungeon
         // ---- `--appstore`: staged marketing screenshots at the device's native size ----
         bool _appStore;
 
-        /// <summary>Render the App Store screenshot set (touch UI) into <paramref name="dir"/>, then stop.</summary>
+        /// <summary>Render the App Store screenshot set (touch UI, or desktop for the Mac App Store) into <paramref name="dir"/>, then stop.</summary>
         public void EnableAppStoreCapture(string dir) { EnableCapture(dir); _appStore = true; }
 
         void StoreLog(params (string text, Vector4 color)[] lines)
@@ -212,11 +212,15 @@ namespace Dungeon
                     _menuItems.Clear();
                     _menuItems.Add(MenuAction.Continue);
                     _menuItems.Add(MenuAction.NewGame);
-                    _menuItems.Add(MenuAction.Shop);
-                    _menuItems.Add(MenuAction.Leaderboards);
+                    if (Store != null) _menuItems.Add(MenuAction.Shop);
+                    if (Leaderboards != null) _menuItems.Add(MenuAction.Leaderboards);
+                    if (!TouchUI) _menuItems.Add(MenuAction.Quit); // the desktop (Mac) set
                     _menuSel = 0; _inMenu = true;
                     break;
-                case 9: Shot("title"); Console.WriteLine("[appstore] done"); _capture = false; break;
+                case 9:
+                    Shot("title"); Console.WriteLine("[appstore] done"); _capture = false;
+                    if (!TouchUI) Close(); // the desktop run is a one-shot tool; iOS stays up
+                    break;
             }
         }
 

@@ -188,7 +188,7 @@ namespace Dungeon
             {
                 Directory.CreateDirectory(_capDir);
                 if (_iconPath != null) SetupIconScene();
-                else if (!TouchUI) SetupShot(0); // touch builds run the scripted walkthrough instead
+                else if (!TouchUI && !_appStore && !_preview) SetupShot(0); // the others are scripted per frame
             }
         }
 
@@ -1156,7 +1156,8 @@ namespace Dungeon
         // ---- capture driver -------------------------------------------------
         void CaptureTick()
         {
-            if (TouchUI) { TouchCaptureTick(); return; }
+            if (_preview) { PreviewTick(); return; }
+            if (TouchUI || _appStore) { TouchCaptureTick(); return; }
             if (++_capSettle < 6) return; // let a few frames settle before grabbing
             _capSettle = 0;
             string path = Path.Combine(_capDir, $"{_capShot}-{CapShots[_capShot]}.bmp");
@@ -1609,7 +1610,7 @@ namespace Dungeon
                 }
                 else
                     _hud.TextCentered("WASD MOVE   A/D TURN   Q/E STRAFE   SPACE ATTACK   M MUSIC   F11 WINDOW",
-                        W / 2f, 40 * ui, 1.7f * ui, hint);
+                        W / 2f, H * 0.3f, 1.7f * ui, hint); // below the hero stats and the minimap
             }
 
             // ---- music-off indicator

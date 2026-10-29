@@ -5,17 +5,27 @@ using OpenTK.Windowing.GraphicsLibraryFramework;
 
 namespace Dungeon
 {
+    public enum CaptureMode { Scenes, AppStore, Preview }
+
     /// <summary>Desktop host (macOS / Windows): an OpenTK window that drives <see cref="Game"/>.</summary>
     public sealed class DesktopWindow : GameWindow
     {
         readonly Game _game;
+        readonly WavAudioOut _wav; // `--preview` records sound in game time instead of playing it
+        readonly string _capDir;
 
-        public DesktopWindow(GameWindowSettings gws, NativeWindowSettings nws, bool capture, string capDir, string iconPath = null)
+        public DesktopWindow(GameWindowSettings gws, NativeWindowSettings nws, bool capture, string capDir,
+                             string iconPath = null, CaptureMode mode = CaptureMode.Scenes)
             : base(gws, nws)
         {
-            _game = new Game(new OpenALOut(), touchUI: false);
+            bool preview = capture && iconPath == null && mode == CaptureMode.Preview;
+            if (preview) _wav = new WavAudioOut();
+            _capDir = capDir;
+            _game = new Game(preview ? _wav : new OpenALOut(), touchUI: false);
             _game.QuitRequested += Close;
             if (iconPath != null) _game.EnableIconCapture(iconPath);
+            else if (preview) _game.EnablePreviewCapture(capDir);
+            else if (capture && mode == CaptureMode.AppStore) _game.EnableAppStoreCapture(capDir);
             else if (capture) _game.EnableCapture(capDir);
         }
 
@@ -29,7 +39,8 @@ namespace Dungeon
         protected override void OnUpdateFrame(FrameEventArgs args)
         {
             base.OnUpdateFrame(args);
-            _game.Update((float)args.Time);
+            // the preview steps at a fixed rate so every recorded frame is exactly 1/30 s
+            _game.Update(_wav != null ? 1f / Game.PreviewFps : (float)args.Time);
         }
 
         protected override void OnRenderFrame(FrameEventArgs args)
@@ -37,6 +48,7 @@ namespace Dungeon
             base.OnRenderFrame(args);
             _game.FramebufferSize = FramebufferSize;
             _game.Render();
+            _wav?.Advance(1.0 / Game.PreviewFps);
             SwapBuffers();
         }
 
@@ -99,6 +111,7 @@ namespace Dungeon
 
         protected override void OnUnload()
         {
+            _wav?.Save(System.IO.Path.Combine(_capDir, "audio.wav"));
             _game.Unload();
             base.OnUnload();
         }

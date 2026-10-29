@@ -142,3 +142,17 @@ combat, depths, hero creation, and title.
 To regenerate them, run the app in the matching simulator with `--appstore`
 (`ios/run-sim.sh "iPhone 17 Pro" --appstore`). The frames are written to the
 app's `Documents/appstore` folder.
+
+### Mac
+
+| Folder / file | Slot | Size |
+|---|---|---|
+| `screenshots/mac/` | Mac screenshots | 2880 × 1800 (16:10), same five shots with the keyboard UI |
+| `preview/mac-1920x1080.mp4` | Mac app preview | 1920 × 1080, 29 s, 30 fps H.264 (~10 Mbps) + 256 kbps stereo AAC |
+
+The preview is real gameplay: the game runs at a fixed 30 fps while a scripted player
+goes from the title menu through hero creation, then plays on autopilot (fights, loot,
+the stairs down to depth 2). Sound is mixed in game time, so it stays in sync. Choose the poster frame in App Store Connect.
+
+To regenerate both, run `tools/mac-appstore.sh` on a Retina Mac. It uses the desktop
+`--appstore` and `--preview` modes and `tools/encode-preview.swift`, so it needs no ffmpeg.
